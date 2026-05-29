@@ -1,0 +1,185 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# aihydro-data — global hydrology dataverse
+#
+# A variable-centric, multi-source, region-aware fetch library that unifies
+# Google Earth Engine, STAC catalogues, HyRiver, and direct HTTP APIs behind
+# one contract:  fetch(variable, geometry, start, end, mode, product=None).
+#
+# Wave 2 of the AI-Hydro PyPI modularization (see /Users/mgalib/.claude/plans/
+# i-want-you-to-polymorphic-axolotl.md for the approved design).
+# ─────────────────────────────────────────────────────────────────────────────
+
+[project]
+name = "aihydro-data"
+version = "0.1.7"
+description = "Global hydrology dataverse — multi-source, region-aware data fetch (GEE + STAC + HyRiver) for AI agents and humans"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [
+    {name = "Mohammad Galib", email = "mgalib@purdue.edu"}
+]
+readme = "README.md"
+keywords = [
+    "hydrology", "geospatial", "earth-engine", "STAC",
+    "global", "data-fetch", "MCP", "agentic", "CAMELS",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Hydrology",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+# ── Core deps (always installed) ───────────────────────────────────────────
+# Kept lean on purpose. Every backend lives behind an optional extra so a
+# user who only needs HyRiver-style CONUS work doesn't have to install GEE.
+dependencies = [
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "pydantic>=2.0.0",
+    "requests>=2.31.0",
+    "python-dateutil>=2.8.2",
+    "shapely>=2.0.0",
+    "geopandas>=0.13.0",
+    "pyproj>=3.6.0",
+]
+
+# ── Optional extras — one per backend family ────────────────────────────────
+[project.optional-dependencies]
+
+# Google Earth Engine backend (sources/gee.py) — primary global backend
+gee = [
+    "earthengine-api>=0.1.390",
+]
+
+# STAC backend (sources/stac.py) — Planetary Computer, Element84, Earth Search
+stac = [
+    "pystac-client>=0.7.0",
+    "stackstac>=0.5.0",
+    "planetary-computer>=1.0.0",
+    "rioxarray>=0.15.0",
+    "rasterio>=1.3.0",
+    "xarray>=2023.0.0",
+]
+
+# HyRiver backend (sources/hyriver.py) — CONUS via pygridmet/pygeohydro/etc.
+hyriver = [
+    "pynhd>=0.16.0",
+    "pygeohydro>=0.16.0",
+    "pygridmet>=0.15.0",
+    "py3dep>=0.15.0",
+    "hydrofunctions>=0.2.0",
+    "rioxarray>=0.15.0",
+    "xarray>=2023.0.0",
+]
+
+# Direct-API backend (sources/direct_api.py) — NWIS, GRDC, NLDI direct HTTP
+direct = [
+    "hydrofunctions>=0.2.0",
+]
+
+# OPeNDAP backend — auth-free data sources via IRI Data Library / Unidata
+# (CHIRPS_IRI uses IRI OPeNDAP; netCDF4 must be built with OPeNDAP support,
+# which is the default for conda packages and most pip wheels on Linux/macOS)
+opendap = [
+    "xarray>=2023.0.0",
+    "netCDF4>=1.6.0",
+]
+
+# Caching layer
+cache = [
+    "diskcache>=5.6.0",
+]
+
+# MCP server integration — exposes data_fetch, data_help, etc. as MCP tools
+mcp = [
+    "fastmcp>=2.0.0",
+]
+
+# Visualisation helpers — folium previews, matplotlib colormaps
+viz = [
+    "matplotlib>=3.7.0",
+    "folium>=0.15.0",
+]
+
+# Full install — everything except dev tooling
+all = [
+    "aihydro-data[gee,stac,hyriver,direct,opendap,cache,mcp,viz]",
+]
+
+# Development
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "pytest-mock>=3.12.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "build>=1.0.0",
+    "twine>=4.0.0",
+]
+
+# ── Console scripts ─────────────────────────────────────────────────────────
+[project.scripts]
+aihydro-data = "aihydro_data.cli:main"
+
+# ── Plug-in entry points (live in the parent aihydro.* namespace) ──────────
+# Wired into aihydro-tools' MCP registry so the data_* tools auto-register
+# when the user has both packages installed.
+[project.entry-points."aihydro.tools"]
+data_fetch          = "aihydro_data.mcp:register_tools"
+
+# Per-package help/skills hook — aihydro-tools' SKILL DISCOVERY can offer
+# our `data.first_use` onboarding skill when the agent first touches data_*.
+[project.entry-points."aihydro.skills"]
+data = "aihydro_data.skills:get_skills_dir"
+
+# ── URLs ────────────────────────────────────────────────────────────────────
+[project.urls]
+Homepage      = "https://github.com/AI-Hydro/aihydro-data"
+Documentation = "https://github.com/AI-Hydro/AI-Hydro/wiki"
+Repository    = "https://github.com/AI-Hydro/aihydro-data"
+Issues        = "https://github.com/AI-Hydro/aihydro-data/issues"
+
+# ── Package discovery ──────────────────────────────────────────────────────
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aihydro_data*"]
+
+[tool.setuptools.package-data]
+"aihydro_data" = []
+"aihydro_data.help_topics" = ["*.md"]
+"aihydro_data.skills" = ["*.md"]
+
+# ── Pytest ─────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+markers = [
+    "live: tests requiring internet + auth (GEE, STAC, USGS). Deselect with -m 'not live'.",
+    "gee: tests requiring an authenticated Earth Engine session.",
+]
+
+# ── Ruff ───────────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+# Exclude vendored snapshots from lint — they're frozen reference copies.
+extend-exclude = ["aihydro_data/sources/_gee_vendored"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+# ── Mypy ───────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+warn_redundant_casts = true
+ignore_missing_imports = true

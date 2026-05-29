@@ -1,0 +1,398 @@
+"""
+Direct-API backend.
+
+Wraps REST APIs that don't go through GEE or HyRiver's OPeNDAP stack:
+  - USGS NWIS daily values  (via `dataretrieval` — part of the HyRiver stack)
+  - CHIRPS_IRI precipitation (via IRI Data Library OPeNDAP — auth-free)
+  - GRDC monthly streamflow (Phase 4)
+
+All imports are lazy — this module is safe to import without extras installed.
+
+Install: pip install aihydro-data[hyriver]   (for NWIS/dataretrieval)
+         pip install aihydro-data[opendap]   (for CHIRPS_IRI/xarray+netCDF4)
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any, Optional
+
+from aihydro_data.contracts import AggregationMode, ProductSpec
+from aihydro_data.sources.base import SourceBackend
+
+log = logging.getLogger(__name__)
+
+
+def _gauge_id_from_geometry(geometry: Any) -> str | None:
+    """
+    Extract a USGS gauge ID from various input shapes:
+      - GaugeID wrapper (set by coerce_geometry)
+      - raw string passed through (defensive)
+      - anything else → None (caller should fall back to spatial lookup)
+
+    Normalisation: strips 'USGS-' / 'USGS:' prefixes, then zero-pads numeric
+    IDs back to at least 8 digits per the USGS convention. Non-numeric IDs
+    are passed through uppercased.
+    """
+    # GaugeID wrapper from geometry.coerce_geometry
+    raw = None
+    if getattr(geometry, "geom_type", None) == "GaugeID":
+        raw = geometry.id
+    elif isinstance(geometry, str):
+        raw = geometry
+    if raw is None:
+        return None
+
+    sid = raw.strip().upper().replace("USGS-", "").replace("USGS:", "")
+    return sid.zfill(8) if sid.isdigit() else sid
+
+
+class Backend(SourceBackend):
+    """Direct-API backend (NWIS, GRDC, …)."""
+
+    source_id = "direct_api"
+
+    def capabilities(self) -> dict[str, Any]:
+        return {
+            "variables": ["streamflow", "precipitation"],
+            "coverage": ["CONUS", "global"],
+            "requires_auth": [],
+            "requires_extras": ["hyriver", "opendap"],
+        }
+
+    def is_available(self) -> tuple[bool, Optional[str]]:
+        # The direct_api backend hosts both NWIS (needs dataretrieval) and
+        # CHIRPS_IRI (needs xarray + netCDF4).  We report available=True if
+        # EITHER set of dependencies is present; each fetch method does its
+        # own finer-grained check and raises SourceUnavailable if its specific
+        # deps are missing.
+        for pkg in ("dataretrieval", "xarray"):
+            try:
+                __import__(pkg)
+                return True, None
+            except ImportError:
+                continue
+        return False, (
+            "direct_api backend has no usable dependencies installed. "
+            "For NWIS streamflow: `pip install aihydro-data[hyriver]`. "
+            "For CHIRPS_IRI precipitation: `pip install aihydro-data[opendap]`."
+        )
+
+    def fetch_timeseries(
+        self,
+        spec: ProductSpec,
+        geometry: Any,
+        start: str,
+        end: str,
+        aggregation: AggregationMode,
+    ) -> Any:
+        """Return a pd.DataFrame with date + variable columns."""
+        cfg = spec.backend_config
+        service = cfg.get("service", "nwis_dv")
+
+        if service == "nwis_dv":
+            return self._fetch_nwis_dv(spec, cfg, geometry, start, end)
+
+        if service == "chirps_iri":
+            return self._fetch_chirps_iri(spec, cfg, geometry, start, end)
+
+        raise NotImplementedError(f"direct_api service {service!r} not yet implemented.")
+
+    def fetch_raster(
+        self,
+        spec: ProductSpec,
+        geometry: Any,
+        start: str,
+        end: str,
+    ) -> Any:
+        raise NotImplementedError(
+            "direct_api backend does not support raster fetches — "
+            "it serves point-gauge time series only."
+        )
+
+    # ── NWIS ─────────────────────────────────────────────────────────────
+
+    def _fetch_nwis_dv(
+        self,
+        spec: ProductSpec,
+        cfg: dict[str, Any],
+        geometry: Any,
+        start: str,
+        end: str,
+    ) -> Any:
+        self._assert_available()
+
+        # Resolve gauge ID
+        site_no = _gauge_id_from_geometry(geometry)
+        if site_no is None:
+            # Try centroid-based NLDI nearest-gauge lookup (best-effort)
+            site_no = self._nearest_nwis_gauge(geometry)
+        if not site_no:
+            from aihydro_data.exceptions import GeometryInvalid
+            raise GeometryInvalid(
+                code="NWIS_NO_GAUGE_ID",
+                message=(
+                    "NWIS fetch requires a USGS gauge ID. "
+                    "Pass the gauge ID as the geometry string (e.g. geometry='03245500'), "
+                    "or pass a watershed GeoDataFrame to use the nearest-gauge lookup."
+                ),
+                recovery="Pass geometry='USGS_SITE_NUMBER' or a watershed GeoDataFrame.",
+                next_tools=["data_help"],
+                docs_anchor="streamflow#nwis",
+            )
+
+        import dataretrieval.nwis as nwis
+        import pandas as pd
+
+        param_cd = cfg.get("parameter_code", "00060")
+        stat_cd = cfg.get("stat_code", "00003")
+
+        df, meta = nwis.get_dv(
+            sites=site_no,
+            parameterCd=param_cd,
+            statCd=stat_cd,
+            start=start,
+            end=end,
+        )
+
+        if df is None or df.empty:
+            return pd.DataFrame(columns=["date", "streamflow"])
+
+        # dataretrieval returns a DatetimeIndex with column like '00060_Mean' or 'X_00060_00003'
+        df = df.reset_index()
+        # Find the discharge column
+        q_cols = [c for c in df.columns if "00060" in str(c) and "cd" not in str(c).lower()]
+        if not q_cols:
+            # fallback: first numeric column
+            q_cols = df.select_dtypes("number").columns.tolist()
+
+        date_col = "datetime" if "datetime" in df.columns else df.columns[0]
+        df = df[[date_col, q_cols[0]]].copy()
+        df.columns = ["date", "streamflow"]
+        df["date"] = pd.to_datetime(df["date"])
+        df["streamflow"] = pd.to_numeric(df["streamflow"], errors="coerce")
+
+        # Convert cfs → m³/s
+        df["streamflow"] = df["streamflow"] * 0.028316847
+
+        return df.dropna(subset=["streamflow"]).reset_index(drop=True)
+
+    def _nearest_nwis_gauge(self, geometry: Any) -> str | None:
+        """
+        Use NLDI to find the nearest NWIS streamflow gauge to a geometry centroid.
+        Returns site number string or None on failure.
+        """
+        try:
+            import requests
+            c = geometry.centroid
+            lon, lat = c.x, c.y
+            url = (
+                f"https://labs.waterdata.usgs.gov/api/nldi/linked-data/"
+                f"huc12pp/{lat:.4f}/{lon:.4f}?distance=10"
+            )
+            resp = requests.get(url, timeout=10)
+            if resp.status_code == 200:
+                features = resp.json().get("features", [])
+                if features:
+                    props = features[0].get("properties", {})
+                    return props.get("identifier", None)
+        except Exception as exc:
+            log.debug("NLDI nearest-gauge lookup failed: %s", exc)
+        return None
+
+    # ── CHIRPS via IRI OPeNDAP ────────────────────────────────────────────
+
+    def _fetch_chirps_iri(
+        self,
+        spec: ProductSpec,
+        cfg: dict[str, Any],
+        geometry: Any,
+        start: str,
+        end: str,
+    ) -> Any:
+        """
+        Fetch CHIRPS v2 daily precipitation via IRI Data Library OPeNDAP.
+
+        Auth-free fallback — no GEE account required.  Uses server-side
+        subsetting so only the spatial ROI and date window are transferred.
+
+        Requires: pip install aihydro-data[opendap]  (xarray + netCDF4)
+        """
+        from aihydro_data.exceptions import SourceUnavailable, DateOutOfRange
+
+        # ── Runtime dependency checks (lazy) ──────────────────────────────
+        try:
+            import xarray as xr  # noqa: F401
+        except ImportError:
+            raise SourceUnavailable(
+                code="XARRAY_NOT_INSTALLED",
+                message=(
+                    "xarray is required for CHIRPS_IRI. "
+                    "Run `pip install aihydro-data[opendap]`."
+                ),
+                recovery="pip install aihydro-data[opendap]",
+                next_tools=["data_doctor"],
+                docs_anchor="install#opendap",
+            )
+
+        try:
+            import netCDF4  # noqa: F401
+        except ImportError:
+            raise SourceUnavailable(
+                code="NETCDF4_NOT_INSTALLED",
+                message=(
+                    "netCDF4 is required for CHIRPS_IRI OPeNDAP access. "
+                    "Run `pip install aihydro-data[opendap]`. "
+                    "On conda: `conda install netCDF4`."
+                ),
+                recovery="pip install aihydro-data[opendap]",
+                next_tools=["data_doctor"],
+                docs_anchor="install#opendap",
+            )
+
+        import numpy as np
+        import pandas as pd
+        from datetime import datetime
+
+        # ── Date range guard ──────────────────────────────────────────────
+        CHIRPS_START = datetime(1981, 1, 1)
+        start_dt = datetime.strptime(start, "%Y-%m-%d")
+        end_dt   = datetime.strptime(end,   "%Y-%m-%d")
+        if end_dt < CHIRPS_START:
+            raise DateOutOfRange(
+                code="CHIRPS_IRI_DATE_TOO_EARLY",
+                message=(
+                    f"CHIRPS starts 1981-01-01; requested end={end} is before that."
+                ),
+                recovery="Set start/end to 1981-01-01 or later.",
+                next_tools=["data_list_products"],
+                docs_anchor="products#chirps",
+            )
+        # Clamp start to CHIRPS epoch quietly
+        if start_dt < CHIRPS_START:
+            start_dt = CHIRPS_START
+            log.debug("CHIRPS_IRI: clamping start to 1981-01-01.")
+
+        # ── Geometry → bounding box ───────────────────────────────────────
+        # geometry.bounds → (minx=west, miny=south, maxx=east, maxy=north)
+        try:
+            west, south, east, north = geometry.bounds
+        except (AttributeError, TypeError, ValueError):
+            # Point with no .bounds or centroid-only geometry
+            c = geometry.centroid
+            west = east  = c.x
+            south = north = c.y
+
+        # Expand a degenerate point or very small box to guarantee ≥1 CHIRPS
+        # pixel (0.05°) is captured — avoids empty spatial slice.
+        PAD = 0.06   # just over half a pixel on each side
+        if (east - west) < PAD:
+            mid_x = (east + west) / 2
+            west, east = mid_x - PAD, mid_x + PAD
+        if (north - south) < PAD:
+            mid_y = (north + south) / 2
+            south, north = mid_y - PAD, mid_y + PAD
+
+        # ── Open OPeNDAP dataset (header only — no data yet) ──────────────
+        url = cfg["iri_url"]
+        lon_dim  = cfg.get("lon_dim",  "X")
+        lat_dim  = cfg.get("lat_dim",  "Y")
+        time_dim = cfg.get("time_dim", "T")
+        varname  = cfg.get("variable", "prcp")
+
+        log.debug("CHIRPS_IRI: opening OPeNDAP dataset header …")
+        try:
+            ds = xr.open_dataset(url, engine="netcdf4")
+        except Exception as exc:
+            raise SourceUnavailable(
+                code="CHIRPS_IRI_CONNECT_FAILED",
+                message=(
+                    f"Could not open CHIRPS IRI OPeNDAP endpoint: {exc}. "
+                    "Check network connectivity and try again. "
+                    "The IRI Data Library may be temporarily down."
+                ),
+                recovery=(
+                    "Verify connectivity: curl -I "
+                    "https://iridl.ldeo.columbia.edu. "
+                    "Use GEE CHIRPS (product='CHIRPS') as an alternative."
+                ),
+                next_tools=["data_doctor"],
+                docs_anchor="products#chirps-iri",
+            ) from exc
+
+        # ── Convert dates → T-axis values ─────────────────────────────────
+        # IRI CHIRPS T coordinate is Julian days from an internal epoch.
+        # We don't need to know the epoch: the first T value corresponds
+        # to 1981-01-01 so we compute offsets relative to that.
+        t0_val = float(ds[time_dim].values[0])
+        start_jd = t0_val + (start_dt - CHIRPS_START).days
+        end_jd   = t0_val + (end_dt   - CHIRPS_START).days
+
+        # ── Server-side spatial + temporal subset ─────────────────────────
+        # Y is stored North→South (descending), so slice(north, south) is
+        # correct for descending coordinates.
+        log.debug(
+            "CHIRPS_IRI: subsetting lon=[%.2f, %.2f], lat=[%.2f, %.2f], "
+            "T=[%.0f, %.0f] …",
+            west, east, south, north, start_jd, end_jd,
+        )
+        try:
+            sub = ds[varname].sel(
+                **{
+                    lon_dim:  slice(west, east),
+                    lat_dim:  slice(north, south),  # descending Y → N first
+                    time_dim: slice(start_jd, end_jd),
+                }
+            )
+            # Spatial mean, then pull data from server
+            vals: np.ndarray = sub.mean(dim=[lon_dim, lat_dim]).load().values
+        except Exception as exc:
+            ds.close()
+            raise SourceUnavailable(
+                code="CHIRPS_IRI_FETCH_FAILED",
+                message=f"CHIRPS IRI OPeNDAP subset/load failed: {exc}",
+                recovery="Check geometry bounds and date range. The IRI server may be busy.",
+                next_tools=["data_doctor"],
+                docs_anchor="products#chirps-iri",
+            ) from exc
+        finally:
+            try:
+                ds.close()
+            except Exception:
+                pass
+
+        if len(vals) == 0:
+            import pandas as pd
+            log.warning("CHIRPS_IRI: empty result for window %s–%s.", start, end)
+            return pd.DataFrame(columns=["date", "precipitation"])
+
+        # Generate dates from known start — avoids float32 precision loss on
+        # large Julian day values (same workaround as pyprep/get_chirps.py).
+        dates = pd.date_range(
+            start_dt.strftime("%Y-%m-%d"), periods=len(vals), freq="D"
+        )
+        df = pd.DataFrame({"date": dates, "precipitation": vals.astype(float)})
+        df["precipitation"] = df["precipitation"].clip(lower=0)
+        df["date"] = pd.to_datetime(df["date"])
+        # Trim to exact requested window (in case of rounding)
+        df = df[
+            (df["date"] >= pd.Timestamp(start)) &
+            (df["date"] <= pd.Timestamp(end))
+        ].reset_index(drop=True)
+
+        log.debug(
+            "CHIRPS_IRI: returned %d days, mean=%.2f mm/day.",
+            len(df), df["precipitation"].mean() if len(df) else float("nan"),
+        )
+        return df
+
+    def _assert_available(self) -> None:
+        ok, reason = self.is_available()
+        if not ok:
+            from aihydro_data.exceptions import SourceUnavailable
+            raise SourceUnavailable(
+                code="DIRECT_API_NOT_INSTALLED",
+                message=reason or "direct_api backend is not available.",
+                recovery="pip install aihydro-data[hyriver]",
+                next_tools=["data_doctor"],
+                docs_anchor="install",
+            )
