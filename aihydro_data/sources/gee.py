@@ -21,6 +21,22 @@ from aihydro_data.sources.base import SourceBackend
 log = logging.getLogger(__name__)
 
 
+def _attach_note(da: Any, note: str) -> Any:
+    """Append a caveat to ``da.attrs['aihydro_notes']``.
+
+    The fetch pipeline harvests this list into ``FetchResult.notes`` so
+    backend-level degradations (e.g. a failed polygon clip) surface to the
+    user/agent instead of disappearing into debug logs.
+    """
+    try:
+        notes = list(da.attrs.get("aihydro_notes", []))
+        notes.append(note)
+        da.attrs["aihydro_notes"] = notes
+    except Exception:  # attrs not writable — never let a note break a fetch
+        log.warning("Could not attach note to result attrs: %s", note)
+    return da
+
+
 def _aggregation_to_gee(agg: AggregationMode) -> tuple[str, str]:
     """Map AggregationMode → (spatial_reducer, temporal_aggregation) for GEE."""
     if agg in ("basin_mean", "centroid"):
@@ -366,8 +382,11 @@ class Backend(SourceBackend):
                 if da.shape != first_da.shape:
                     try:
                         da = da.rio.reproject_match(first_da)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.warning(
+                            "SoilGrids %r grid co-registration failed (%s) — "
+                            "property grids may be misaligned.", var_name, exc,
+                        )
                 ds[var_name] = da
             scale_m_eff = eff_scale
 
@@ -376,8 +395,8 @@ class Backend(SourceBackend):
         try:
             if first_da is not None and first_da.rio.crs is not None:
                 ds = ds.rio.write_crs(first_da.rio.crs)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("SoilGrids: could not write CRS onto Dataset (%s).", exc)
         return ds
 
     def fetch_multiband_composite(
@@ -707,8 +726,16 @@ class Backend(SourceBackend):
             coords = list(geom.exterior.coords) if isinstance(geom, _Polygon) else []
             if len(coords) <= 5:
                 return da
-        except Exception:
-            return da
+        except Exception as exc:
+            log.warning(
+                "_clip_to_polygon: could not parse ROI GeoJSON (%s) — "
+                "returning bbox-extent raster without polygon mask.", exc,
+            )
+            return _attach_note(
+                da,
+                "Polygon mask SKIPPED (ROI parse failed) — raster covers the "
+                "full bounding box, including pixels outside the polygon.",
+            )
 
         try:
             import rioxarray  # noqa: F401 — needed for .rio accessor
@@ -721,8 +748,16 @@ class Backend(SourceBackend):
                                   drop=False, all_touched=False)
             return clipped
         except Exception as exc:
-            log.debug("_clip_to_polygon: rioxarray clip failed (%s) — returning unclipped", exc)
-            return da
+            log.warning(
+                "_clip_to_polygon: rioxarray clip failed (%s) — "
+                "returning bbox-extent raster without polygon mask.", exc,
+            )
+            return _attach_note(
+                da,
+                f"Polygon mask FAILED ({type(exc).__name__}) — raster covers the "
+                "full bounding box, including pixels outside the polygon. "
+                "Install/upgrade rioxarray for exact polygon clipping.",
+            )
 
     def _download_tiled(self, image: Any, roi_geojson: Any,
                         gee_bands: list[str], scale_m: float, *,
@@ -869,8 +904,12 @@ class Backend(SourceBackend):
         if cloud_property:
             try:
                 coll = coll.filter(ee.Filter.lt(cloud_property, max_cloud_pct))
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning(
+                    "Scene-level cloud pre-filter on %r skipped (%s) — composite "
+                    "may include cloudier scenes than max_cloud_pct=%s.",
+                    cloud_property, exc, max_cloud_pct,
+                )
 
         if cloud_mask == "sentinel2_scl":
             def _mask_s2(img):
@@ -951,8 +990,11 @@ class Backend(SourceBackend):
             # Sentinel-2 cloud filter (best-effort — property name varies by collection)
             try:
                 coll = coll.filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", max_cloud_pct))
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning(
+                    "NDVI cloud pre-filter skipped (%s) — series may include "
+                    "cloudier scenes than max_cloud_pct=%s.", exc, max_cloud_pct,
+                )
 
             reducer = (
                 ee.Reducer.mean() if spatial_reducer == "mean"

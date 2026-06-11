@@ -12,9 +12,17 @@ preserved). The most-recent entry wins for display purposes.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+
+# Serialises manifest read-modify-write cycles within this process —
+# fetch_batch() runs fetches in a thread pool, and two workers caching the
+# same key concurrently would otherwise clobber each other's appends.
+_MANIFEST_LOCK = threading.Lock()
 
 
 class ManifestEntry:
@@ -95,21 +103,36 @@ def manifest_path(cache_dir: Path, cache_key: str) -> Path:
 
 
 def write_manifest(cache_dir: Path, entry: ManifestEntry) -> None:
-    """Append a ManifestEntry to the sidecar JSON list for this cache key."""
+    """Append a ManifestEntry to the sidecar JSON list for this cache key.
+
+    Thread-safe and crash-safe: the read-append-write cycle is serialised by
+    a process-wide lock, and the file is published atomically (temp file +
+    ``os.replace``) so a reader never sees a half-written manifest.
+    """
     path = manifest_path(cache_dir, entry.cache_key)
-    entries: list[dict[str, Any]] = []
-    if path.exists():
+    with _MANIFEST_LOCK:
+        entries: list[dict[str, Any]] = []
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(existing, list):
+                    entries = existing
+            except Exception:
+                pass
+        entries.append(entry.to_dict())
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(cache_dir), prefix=f".{entry.cache_key}.", suffix=".manifest.tmp",
+        )
         try:
-            existing = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(existing, list):
-                entries = existing
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(entries, fh, indent=2, ensure_ascii=False)
+            os.replace(tmp_name, path)
         except Exception:
-            pass
-    entries.append(entry.to_dict())
-    path.write_text(
-        json.dumps(entries, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
 
 
 def read_manifest(cache_dir: Path, cache_key: str) -> list[ManifestEntry]:

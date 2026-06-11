@@ -96,6 +96,23 @@ def _normalise_variable(variable: str) -> str:
     return canon
 
 
+class BatchResult(list):
+    """List of FetchResult (label order) returned by fetch() batch dispatch.
+
+    Subclasses ``list`` so existing callers that iterate/index keep working,
+    while failures stay visible instead of being silently dropped:
+
+        results = fetch("streamflow", ["03245500", "bogus"], start, end)
+        results.errors   # {"bogus": SourceUnavailable(...)}
+        results.labels   # ["03245500", "bogus"]  (requested order, incl. failed)
+    """
+
+    def __init__(self, results: list, errors: dict, labels: list) -> None:
+        super().__init__(results)
+        self.errors: dict[str, Exception] = errors
+        self.labels: list[str] = labels
+
+
 def _looks_like_collection(geom: Any) -> bool:
     """
     Detect "user passed multiple geometries" so fetch() can auto-dispatch
@@ -110,6 +127,8 @@ def _looks_like_collection(geom: Any) -> bool:
     Returns False for single shapely geoms, single strings, single coord tuples,
     or anything else that's clearly a single fetch.
     """
+    import numbers
+
     # GeoDataFrame
     if hasattr(geom, "iterrows") and hasattr(geom, "geometry"):
         try:
@@ -126,8 +145,11 @@ def _looks_like_collection(geom: Any) -> bool:
     if isinstance(geom, (list, tuple)):
         if len(geom) < 2:
             return False
-        # Bare (lat, lon) or (minx, miny, maxx, maxy) → scalar tuple, NOT a batch
-        if all(isinstance(v, (int, float)) for v in geom) and len(geom) in (2, 4):
+        # Bare (lat, lon) or (minx, miny, maxx, maxy) → scalar tuple, NOT a
+        # batch. numbers.Real covers numpy float32/float64, Decimal, etc.,
+        # which `isinstance(v, (int, float))` misses (np.float32 is not a
+        # Python float) — those coords would otherwise dispatch as a batch.
+        if all(isinstance(v, numbers.Real) for v in geom) and len(geom) in (2, 4):
             return False
         # Otherwise treat as a collection (list of geoms, gauge IDs, or pairs)
         return True
@@ -213,10 +235,33 @@ def fetch(
             variable, geometry, start, end,
             mode=mode, product=product, fallback=fallback,
             aggregation=aggregation, cache=cache,
+            index=index, native_resolution=native_resolution, validate=validate,
         )
-        # Return list of FetchResults in label order — what users intuitively expect
-        return [batch["results"][lbl] for lbl in batch["labels"]
-                if lbl in batch["results"]]
+        errors: dict[str, Exception] = batch["errors"]
+        results = [batch["results"][lbl] for lbl in batch["labels"]
+                   if lbl in batch["results"]]
+        if errors and not results:
+            from aihydro_data.exceptions import SourceUnavailable
+            raise SourceUnavailable(
+                code="ALL_BATCH_ITEMS_FAILED",
+                message=(
+                    f"All {len(errors)} batch items failed for variable={variable!r}. "
+                    f"First error ({next(iter(errors))}): {next(iter(errors.values()))}"
+                ),
+                details={"failed_labels": sorted(errors)},
+                recovery="Check geometries and backend availability (`aihydro-data doctor`).",
+                next_tools=["data_doctor", "data_validate_request"],
+                docs_anchor="troubleshooting",
+            )
+        if errors:
+            log.warning(
+                "fetch() batch: %d of %d items failed (labels: %s) — "
+                "inspect result.errors for details.",
+                len(errors), len(batch["labels"]), sorted(errors),
+            )
+        # BatchResult is a list (label order) carrying .errors / .labels so
+        # partial failures are visible instead of silently shortening the list.
+        return BatchResult(results, errors, batch["labels"])
 
     # ── 1. Validate ───────────────────────────────────────────────────────
     req = FetchRequest(
@@ -443,7 +488,9 @@ def _fetch_one(
             pass
         return method(*args, **kwargs)
 
-    ok, reason = backend.is_available()
+    # Pass the spec so backends with per-product deps (HyRiver) check the
+    # right library; _call drops the kwarg for backends that don't accept it.
+    ok, reason = _call(backend.is_available, spec=spec)
     if not ok:
         from aihydro_data.exceptions import SourceUnavailable
         raise SourceUnavailable(
@@ -492,6 +539,14 @@ def _fetch_one(
     else:
         data = backend.fetch_timeseries(spec, geom, start, end, _agg)
 
+    # Harvest backend-attached caveats (e.g. "polygon mask failed") so
+    # degradations surface on the result instead of dying in debug logs.
+    notes: list[str] = []
+    try:
+        notes = [str(n) for n in getattr(data, "attrs", {}).get("aihydro_notes", [])]
+    except Exception:
+        pass
+
     return FetchResult(
         variable=spec.variable,
         product=spec.id,
@@ -502,7 +557,7 @@ def _fetch_one(
         citation=spec.citation,
         bibtex=spec.bibtex,
         next_steps=list(spec.next_steps),
-        notes=[],
+        notes=notes,
     )
 
 
@@ -521,6 +576,9 @@ def fetch_batch(
     cache: bool = True,
     max_workers: int = 4,
     on_error: str = "warn",   # "warn" | "raise" | "skip"
+    index: Optional[str] = None,
+    native_resolution: bool = False,
+    validate: Optional[Callable[[FetchResult], bool]] = None,
 ) -> dict[str, Any]:
     """
     Fetch one variable for multiple geometries in parallel.
@@ -543,8 +601,14 @@ def fetch_batch(
     on_error : "warn" | "raise" | "skip"
         What to do when one geometry fails:
           "warn"  → log a warning, store the exception in results, continue
-          "raise" → re-raise immediately, aborting all remaining fetches
+          "raise" → re-raise immediately; pending (not-yet-started) fetches are
+                    cancelled and queued workers exit early via a stop flag.
+                    NOTE: fetches already executing a network call run to
+                    completion — Python futures cannot be interrupted mid-call.
           "skip"  → silently omit the failed entry
+    index, native_resolution, validate
+        Forwarded verbatim to each per-geometry fetch() call (spectral index
+        name, native-resolution raster export, quality-gate callback).
 
     Returns
     -------
@@ -556,6 +620,7 @@ def fetch_batch(
         "start", "end" : str
     """
     import concurrent.futures
+    import threading
 
     from aihydro_data.geometry.batch import iter_geometries
 
@@ -566,9 +631,14 @@ def fetch_batch(
 
     results: dict[str, Any] = {}
     errors: dict[str, Exception] = {}
+    stop = threading.Event()   # set on on_error="raise" so queued workers bail
 
     def _one(label_geom: tuple[str, Any]) -> tuple[str, Any]:
         label, geom = label_geom
+        if stop.is_set():
+            raise concurrent.futures.CancelledError(
+                f"fetch_batch aborted before label={label!r} started."
+            )
         result = fetch(
             variable,
             geom,            # already a shapely geometry from iter_geometries
@@ -579,6 +649,9 @@ def fetch_batch(
             fallback=fallback,
             aggregation=aggregation,
             cache=cache,
+            index=index,
+            native_resolution=native_resolution,
+            validate=validate,
         )
         return label, result
 
@@ -589,9 +662,14 @@ def fetch_batch(
             try:
                 lbl, res = future.result()
                 results[lbl] = res
+            except concurrent.futures.CancelledError:
+                pass  # worker bailed after stop was set — original error propagates
             except Exception as exc:
                 if on_error == "raise":
-                    # Cancel remaining and propagate
+                    # future.cancel() only stops futures that haven't started;
+                    # the stop flag makes already-queued workers exit at entry.
+                    # In-flight network calls still run to completion.
+                    stop.set()
                     for f in futures:
                         f.cancel()
                     raise

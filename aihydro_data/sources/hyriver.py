@@ -132,7 +132,32 @@ class Backend(SourceBackend):
             "requires_extras": ["hyriver"],
         }
 
-    def is_available(self) -> tuple[bool, Optional[str]]:
+    # backend_config key → the one HyRiver library that product actually needs
+    _CFG_KEY_TO_LIB = {
+        "pygridmet_variable": "pygridmet",
+        "pydaymet_variable": "pydaymet",
+        "pygeohydro_product": "pygeohydro",
+        "py3dep_resolution": "py3dep",
+    }
+
+    def is_available(self, spec: Optional[ProductSpec] = None) -> tuple[bool, Optional[str]]:
+        # Product-specific check: only the library that product routes through
+        # matters. Without it, a machine with only py3dep installed would
+        # report GridMET products as available and fail mid-fetch.
+        if spec is not None:
+            libs = [lib for key, lib in self._CFG_KEY_TO_LIB.items()
+                    if key in spec.backend_config]
+            for lib in libs:
+                try:
+                    __import__(lib)
+                    return True, None
+                except ImportError:
+                    return False, (
+                        f"Product {spec.id!r} needs {lib!r}, which is not installed. "
+                        "Run `pip install aihydro-data[hyriver]`."
+                    )
+            # Unknown config shape — fall through to the any-lib probe.
+
         for lib in ("pygridmet", "pydaymet", "pygeohydro", "py3dep"):
             try:
                 __import__(lib)

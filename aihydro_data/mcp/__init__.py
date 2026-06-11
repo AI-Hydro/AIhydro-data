@@ -97,14 +97,22 @@ _QUEUED_SOURCES: frozenset[str] = frozenset({
 def _would_route_to_queued_source(variable: str, geometry: Any, product: str | None) -> tuple[bool, str]:
     """Return (True, source_id) if the request would route to a queued backend.
 
-    Uses the routing layer (detect_region + resolve_product_ids + registry) without
-    making any network call. Safe to call before the actual fetch.
-    Returns (False, '') when the route is fast or cannot be determined.
+    Mirrors the fetch pipeline's fallback walk: the request only blocks on a
+    queued backend when the FIRST candidate that is both registered and
+    available is queued. A queued product sitting later in the chain (e.g.
+    GLOFAS as the last-resort streamflow fallback) must NOT trigger a
+    redirect — the instant candidates ahead of it will serve.
+
+    Uses the routing layer (detect_region + resolve_product_ids + registry)
+    plus cheap backend availability probes (import/credential-file checks,
+    no network). Returns (False, '') when the route is fast or cannot be
+    determined.
     """
     try:
         from aihydro_data.routing import detect_region, resolve_product_ids
         from aihydro_data.products import get_product
         from aihydro_data.geometry import coerce_geometry
+        from aihydro_data.sources.base import get_backend
 
         geom = coerce_geometry(geometry)
         region = detect_region(geom)
@@ -116,10 +124,16 @@ def _would_route_to_queued_source(variable: str, geometry: Any, product: str | N
         for pid in candidates:
             try:
                 spec = get_product(pid)
-                if spec.source in _QUEUED_SOURCES:
-                    return True, spec.source
             except KeyError:
-                continue
+                continue  # unregistered → the fetch loop would skip it too
+            try:
+                ok, _reason = get_backend(spec.source).is_available()
+            except Exception:
+                ok = False
+            if not ok:
+                continue  # unavailable → fetch loop falls through to the next
+            # First viable candidate decides the route.
+            return (spec.source in _QUEUED_SOURCES, spec.source if spec.source in _QUEUED_SOURCES else "")
     except Exception:
         pass
     return False, ""

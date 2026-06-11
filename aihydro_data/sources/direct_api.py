@@ -185,25 +185,59 @@ class Backend(SourceBackend):
 
         return df.dropna(subset=["streamflow"]).reset_index(drop=True)
 
-    def _nearest_nwis_gauge(self, geometry: Any) -> str | None:
+    _NLDI_BASE = "https://api.water.usgs.gov/nldi/linked-data"
+
+    def _nearest_nwis_gauge(self, geometry: Any, distance_km: int = 25) -> str | None:
         """
-        Use NLDI to find the nearest NWIS streamflow gauge to a geometry centroid.
-        Returns site number string or None on failure.
+        Use NLDI to find an NWIS streamflow gauge near a geometry centroid.
+
+        Two-step lookup (the NLDI API has no direct lat/lon→gauge route):
+          1. ``/comid/position?coords=POINT(lon lat)`` → the NHDPlus comid of
+             the flowline at/near the point.
+          2. ``/comid/{comid}/navigation/UM/nwissite?distance=<km>`` → NWIS
+             sites walking the upstream main stem; falls back to ``DM``
+             (downstream main) when no upstream site exists.
+
+        Returns the bare site number (``USGS-`` prefix stripped) or None.
         """
         try:
             import requests
             c = geometry.centroid
             lon, lat = c.x, c.y
-            url = (
-                f"https://labs.waterdata.usgs.gov/api/nldi/linked-data/"
-                f"huc12pp/{lat:.4f}/{lon:.4f}?distance=10"
+
+            resp = requests.get(
+                f"{self._NLDI_BASE}/comid/position",
+                params={"coords": f"POINT({lon:.6f} {lat:.6f})"},
+                timeout=15,
             )
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                features = resp.json().get("features", [])
-                if features:
-                    props = features[0].get("properties", {})
-                    return props.get("identifier", None)
+            if resp.status_code != 200:
+                log.debug("NLDI position lookup HTTP %s.", resp.status_code)
+                return None
+            features = resp.json().get("features", [])
+            if not features:
+                return None
+            comid = features[0].get("properties", {}).get("comid")
+            if not comid:
+                return None
+
+            for mode in ("UM", "DM"):
+                resp = requests.get(
+                    f"{self._NLDI_BASE}/comid/{comid}/navigation/{mode}/nwissite",
+                    params={"distance": distance_km},
+                    timeout=15,
+                )
+                if resp.status_code != 200:
+                    continue
+                sites = resp.json().get("features", [])
+                if sites:
+                    ident = sites[0].get("properties", {}).get("identifier", "")
+                    site_no = str(ident).replace("USGS-", "").replace("USGS:", "").strip()
+                    if site_no:
+                        log.info(
+                            "NLDI nearest gauge: comid=%s → %s (navigation=%s).",
+                            comid, site_no, mode,
+                        )
+                        return site_no
         except Exception as exc:
             log.debug("NLDI nearest-gauge lookup failed: %s", exc)
         return None

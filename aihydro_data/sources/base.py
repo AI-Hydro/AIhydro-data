@@ -24,8 +24,16 @@ class SourceBackend(ABC):
         """Return: {'variables': [...], 'coverage': [...], 'requires_auth': [...]}."""
 
     @abstractmethod
-    def is_available(self) -> tuple[bool, Optional[str]]:
+    def is_available(self, spec: Optional[ProductSpec] = None) -> tuple[bool, Optional[str]]:
         """(True, None) if backend is usable right now, else (False, reason).
+
+        `spec` (optional) narrows the check to what THAT product needs —
+        e.g. the HyRiver backend hosts four independent libraries, and a
+        GridMET product only requires pygridmet. ``spec=None`` answers the
+        broader "is any part of this backend usable?" (doctor probes).
+        Subclasses that don't differentiate may ignore the argument; callers
+        must tolerate implementations that omit it (use signature filtering).
+
         `reason` becomes the `message` field of an AuthRequired/SourceUnavailable
         error so the agent can act on it."""
 
