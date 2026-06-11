@@ -107,6 +107,11 @@ PRODUCTS: list[ProductSpec] = [
             "band": "Map",
             "scale_m": 10,
             "categorical": True,
+            # WorldCover v200 is an ImageCollection of tiles (one per UTM zone).
+            # Flag as static so gee.fetch_raster uses the mosaic() → select() path,
+            # and as a collection so the driver calls ImageCollection.mosaic() first.
+            "static": True,
+            "gee_is_collection": True,
         },
     ),
 
@@ -156,6 +161,12 @@ PRODUCTS: list[ProductSpec] = [
             "scale_m": 10,
             "categorical": True,
             "composite_method": "mode",   # mode composite over the date range
+            # NOTE: fetch_raster for this product requires a temporal mode-composite
+            # over the requested date range (not a static mosaic). That path is not
+            # yet implemented in the GEE driver. DYNAMIC_WORLD is therefore NOT in
+            # the default routing chain — it can only be called with mode='manual'.
+            # When the driver is extended, remove this note and re-add to policy.py.
+            "_not_routed": True,
         },
     ),
 

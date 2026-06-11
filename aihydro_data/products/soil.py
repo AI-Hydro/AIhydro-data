@@ -63,8 +63,8 @@ PRODUCTS: list[ProductSpec] = [
         next_steps=_SOIL_NEXT_STEPS,
         backend_config={
             "pygeohydro_product": "polaris",
-            "default_layers": ["sand", "silt", "clay", "ksat"],
-            "default_depth": "0_5",
+            # POLARIS layer names: "<property>_<depth-index>"; "_5" = 0–5 cm.
+            "default_layers": ["sand_5", "silt_5", "clay_5", "ksat_5"],
         },
     ),
 
@@ -111,7 +111,13 @@ PRODUCTS: list[ProductSpec] = [
         next_steps=_SOIL_NEXT_STEPS,
         backend_config={
             "gee_collection": "projects/soilgrids-isric",
-            "default_property": "clay_mean",
+            # Multi-property texture fetch → xr.Dataset of sand/silt/clay (and
+            # ksat where available) at the 0–5 cm depth, named POLARIS-style
+            # (sand_5, silt_5, clay_5) so the CN classifier works unchanged.
+            "soil_properties": ["sand", "silt", "clay"],
+            "soil_depth": "0-5cm",
+            "soil_depth_suffix": "5",
+            "unit_conversion": 0.1,        # g/kg → %
             "scale_m": 250,
         },
     ),

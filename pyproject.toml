@@ -43,6 +43,10 @@ classifiers = [
 # Kept lean on purpose. Every backend lives behind an optional extra so a
 # user who only needs HyRiver-style CONUS work doesn't have to install GEE.
 dependencies = [
+    # Shared robustness substrate — supplies the single hashing/provenance
+    # vocabulary (content_hash/param_hash) so cache keys never drift between
+    # layers. Zero heavy deps (pure stdlib), so this stays light.
+    "aihydro-core",
     "numpy>=1.24.0",
     "pandas>=2.0.0",
     "pydantic>=2.0.0",
@@ -95,6 +99,28 @@ opendap = [
     "netCDF4>=1.6.0",
 ]
 
+# GloFAS backend (sources/cds_glofas.py) — global modelled river discharge via
+# the CEMS Early Warning Data Store (EWDS). Needs a free Copernicus token in
+# ~/.cdsapirc and one-time CEMS-FLOODS licence acceptance.
+glofas = [
+    "cdsapi>=0.7.0",
+    "xarray>=2023.0.0",
+    "netCDF4>=1.6.0",
+    "pyproj>=3.4.0",
+    "shapely>=2.0.0",
+]
+
+# GEOGLOWS v2 retrospective backend (sources/geoglows_retro.py) — global modelled
+# river discharge on the TDX-Hydro reach network, anonymous AWS Open Data S3 Zarr.
+# No auth, no queue, 1940→present daily.
+geoglows = [
+    "geoglows>=2.2",
+    "s3fs>=2023.0.0",
+    "zarr>=2.14.0",
+    "pyproj>=3.4.0",
+    "shapely>=2.0.0",
+]
+
 # Caching layer
 cache = [
     "diskcache>=5.6.0",
@@ -113,7 +139,7 @@ viz = [
 
 # Full install — everything except dev tooling
 all = [
-    "aihydro-data[gee,stac,hyriver,direct,opendap,cache,mcp,viz]",
+    "aihydro-data[gee,stac,hyriver,direct,opendap,glofas,geoglows,cache,mcp,viz]",
 ]
 
 # Development
@@ -165,6 +191,21 @@ markers = [
     "live: tests requiring internet + auth (GEE, STAC, USGS). Deselect with -m 'not live'.",
     "gee: tests requiring an authenticated Earth Engine session.",
 ]
+
+# ── Layering contract ────────────────────────────────────────────────────────
+# aihydro-data sits ABOVE aihydro-core and BESIDE the ai_hydro tools package.
+# It may depend DOWN on core, but must never import the ai_hydro domain pack
+# (that would be a sideways/upward edge). Run with `lint-imports`; also enforced
+# offline by tests/test_layering.py.
+[tool.importlinter]
+root_package = "aihydro_data"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "aihydro_data must not import the ai_hydro tools package"
+type = "forbidden"
+source_modules = ["aihydro_data"]
+forbidden_modules = ["ai_hydro"]
 
 # ── Ruff ───────────────────────────────────────────────────────────────────
 [tool.ruff]

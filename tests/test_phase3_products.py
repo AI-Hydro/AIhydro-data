@@ -32,8 +32,9 @@ class TestTemperatureProducts:
         from aihydro_data.products import list_products
         tmax_ids = {p.id for p in list_products(variable="tmax")}
         tmin_ids = {p.id for p in list_products(variable="tmin")}
-        assert tmax_ids == {"GRIDMET_TMAX", "DAYMET_TMAX", "ERA5L_TMAX"}
-        assert tmin_ids == {"GRIDMET_TMIN", "DAYMET_TMIN", "ERA5L_TMIN"}
+        # Core GEE/HyRiver products plus Open-Meteo auth-free fallbacks (added in v0.3)
+        assert {"GRIDMET_TMAX", "DAYMET_TMAX", "ERA5L_TMAX", "OPEN_METEO_TMAX"}.issubset(tmax_ids)
+        assert {"GRIDMET_TMIN", "DAYMET_TMIN", "ERA5L_TMIN", "OPEN_METEO_TMIN"}.issubset(tmin_ids)
 
     def test_gridmet_tmax_spec(self):
         spec = _get("GRIDMET_TMAX")
@@ -184,7 +185,9 @@ class TestSoilProducts:
         assert spec.source == "hyriver"
         assert spec.resolution_m == 30
         assert spec.backend_config["pygeohydro_product"] == "polaris"
-        assert "sand" in spec.backend_config["default_layers"]
+        # POLARIS layers are "<property>_<depth-index>" (0–5 cm → "_5"),
+        # matching the pygeohydro.soil_polaris API used by the backend.
+        assert "sand_5" in spec.backend_config["default_layers"]
 
     def test_soilgrids_global(self):
         spec = _get("SOILGRIDS")

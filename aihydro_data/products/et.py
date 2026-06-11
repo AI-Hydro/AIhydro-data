@@ -8,6 +8,7 @@ IDs:
     SSEBOP_ET       – SSEBop CONUS/global actual ET, 1 km, GEE
     ERA5L_PET       – ERA5-Land potential ET, ~11 km, GEE
     GRIDMET_PET     – GridMET reference ET, CONUS ~4 km, HyRiver
+    OPEN_METEO_PET  – FAO-56 ET0 via Open-Meteo, ~25 km, no auth, global
 """
 from __future__ import annotations
 
@@ -251,5 +252,53 @@ PRODUCTS: list[ProductSpec] = [
         examples=["fetch('pet', gdf, '2010-01-01', '2020-12-31')  # auto → GridMET PET in CONUS"],
         next_steps=_ET_NEXT_STEPS,
         backend_config={"pygridmet_variable": "pet"},
+    ),
+
+    # ── Open-Meteo PET (FAO-56 ET0, no auth, global, 1940-present) ───────
+    # Auth-free fallback for PET when GEE is unavailable or unauthed.
+    # Returns FAO-56 Penman-Monteith grass reference ET0 (mm/day).
+    # Uses centroid-based basin_mean approximation (~0.25° ERA5 resolution).
+    ProductSpec(
+        id="OPEN_METEO_PET",
+        variable="pet",
+        source="direct_api",
+        source_dataset_id="open-meteo-era5",
+        coverage=["global"],
+        temporal_start="1940-01-01",
+        temporal_end="present",
+        resolution_m=25000,
+        timestep="daily",
+        units="mm/day",
+        license="CC BY 4.0 (Open-Meteo) / Copernicus (ERA5 data)",
+        citation=(
+            "Zippenfenig, P. (2023). Open-Meteo.com Weather API. "
+            "Zenodo. https://doi.org/10.5281/zenodo.7970649"
+        ),
+        bibtex=(
+            "@dataset{zippenfenig2023openmeteo,\n"
+            "  author    = {Zippenfenig, Patrick},\n"
+            "  title     = {{Open-Meteo.com} Weather {API}},\n"
+            "  publisher = {Zenodo},\n"
+            "  year      = {2023},\n"
+            "  doi       = {10.5281/zenodo.7970649}\n"
+            "}"
+        ),
+        homepage="https://open-meteo.com/",
+        requires_extras=[],
+        requires_auth=[],
+        common_pitfalls=[
+            "Centroid-based — not a true spatial mean for large basins.",
+            "Returns FAO-56 Penman-Monteith grass reference ET0, not actual or potential basin ET.",
+            "~25 km resolution (ERA5 grid); finer-resolution products preferred.",
+        ],
+        examples=[
+            "fetch('pet', gdf, '2000-01-01', '2020-12-31', mode='manual', product='OPEN_METEO_PET')",
+        ],
+        next_steps=_ET_NEXT_STEPS,
+        backend_config={
+            "service": "open_meteo",
+            "om_variable": "et0_fao_evapotranspiration",
+            "result_column": "pet",
+        },
     ),
 ]

@@ -4,12 +4,14 @@ Direct-API backend.
 Wraps REST APIs that don't go through GEE or HyRiver's OPeNDAP stack:
   - USGS NWIS daily values  (via `dataretrieval` — part of the HyRiver stack)
   - CHIRPS_IRI precipitation (via IRI Data Library OPeNDAP — auth-free)
+  - Open-Meteo temperature + PET (no auth, global, 1940-present, centroid-based)
   - GRDC monthly streamflow (Phase 4)
 
 All imports are lazy — this module is safe to import without extras installed.
 
 Install: pip install aihydro-data[hyriver]   (for NWIS/dataretrieval)
          pip install aihydro-data[opendap]   (for CHIRPS_IRI/xarray+netCDF4)
+         requests                            (for Open-Meteo — already a core dep)
 """
 from __future__ import annotations
 
@@ -53,18 +55,22 @@ class Backend(SourceBackend):
 
     def capabilities(self) -> dict[str, Any]:
         return {
-            "variables": ["streamflow", "precipitation"],
+            "variables": ["streamflow", "precipitation", "tmax", "tmin", "pet"],
             "coverage": ["CONUS", "global"],
             "requires_auth": [],
             "requires_extras": ["hyriver", "opendap"],
         }
 
     def is_available(self) -> tuple[bool, Optional[str]]:
-        # The direct_api backend hosts both NWIS (needs dataretrieval) and
-        # CHIRPS_IRI (needs xarray + netCDF4).  We report available=True if
-        # EITHER set of dependencies is present; each fetch method does its
-        # own finer-grained check and raises SourceUnavailable if its specific
-        # deps are missing.
+        # The direct_api backend hosts NWIS (needs dataretrieval), CHIRPS_IRI
+        # (needs xarray + netCDF4), and Open-Meteo (needs only requests — always
+        # available).  We report available=True if ANY dep is present; each
+        # fetch method does its own finer-grained check.
+        try:
+            import requests  # noqa: F401
+            return True, None
+        except ImportError:
+            pass
         for pkg in ("dataretrieval", "xarray"):
             try:
                 __import__(pkg)
@@ -94,6 +100,9 @@ class Backend(SourceBackend):
 
         if service == "chirps_iri":
             return self._fetch_chirps_iri(spec, cfg, geometry, start, end)
+
+        if service == "open_meteo":
+            return self._fetch_open_meteo(spec, cfg, geometry, start, end)
 
         raise NotImplementedError(f"direct_api service {service!r} not yet implemented.")
 
@@ -382,6 +391,159 @@ class Backend(SourceBackend):
         log.debug(
             "CHIRPS_IRI: returned %d days, mean=%.2f mm/day.",
             len(df), df["precipitation"].mean() if len(df) else float("nan"),
+        )
+        return df
+
+    # ── Open-Meteo (no auth, global, 1940-present) ────────────────────────
+
+    def _fetch_open_meteo(
+        self,
+        spec: ProductSpec,
+        cfg: dict[str, Any],
+        geometry: Any,
+        start: str,
+        end: str,
+    ) -> Any:
+        """
+        Fetch daily temperature or PET from Open-Meteo ERA5 reanalysis archive.
+
+        Auth-free, global, 1940-present.  Uses the geometry centroid for the
+        request (basin_mean approximation — accurate for point/small basins;
+        good-enough for large basins at ERA5's ~0.25° resolution).
+
+        API: https://archive-api.open-meteo.com/v1/archive
+        Variable mapping (backend_config["om_variable"]):
+            temperature_2m_max          → tmax (°C)
+            temperature_2m_min          → tmin (°C)
+            et0_fao_evapotranspiration  → pet (mm/day)
+
+        Requires: requests (standard dep — always available)
+        """
+        from aihydro_data.exceptions import SourceUnavailable, DateOutOfRange
+
+        try:
+            import requests
+        except ImportError:
+            raise SourceUnavailable(
+                code="REQUESTS_NOT_INSTALLED",
+                message=(
+                    "The `requests` library is required for Open-Meteo. "
+                    "Install it with: pip install requests"
+                ),
+                recovery="pip install requests",
+                next_tools=["data_doctor"],
+                docs_anchor="install",
+            )
+
+        import pandas as pd
+        from datetime import datetime
+
+        # ── Date range guard ──────────────────────────────────────────────
+        OM_START = datetime(1940, 1, 1)
+        start_dt = datetime.strptime(start, "%Y-%m-%d")
+        end_dt   = datetime.strptime(end,   "%Y-%m-%d")
+        if end_dt < OM_START:
+            raise DateOutOfRange(
+                code="OPEN_METEO_DATE_TOO_EARLY",
+                message=(
+                    f"Open-Meteo archive starts 1940-01-01; requested end={end} is before that."
+                ),
+                recovery="Set start/end to 1940-01-01 or later.",
+                next_tools=["data_list_products"],
+                docs_anchor="products#open-meteo",
+            )
+        if start_dt < OM_START:
+            log.debug("Open-Meteo: clamping start to 1940-01-01.")
+            start = "1940-01-01"
+
+        # ── Geometry → centroid ───────────────────────────────────────────
+        try:
+            centroid = geometry.centroid
+            lat, lon = centroid.y, centroid.x
+        except Exception:
+            # Geometry may not have a centroid (e.g. already a Point)
+            try:
+                lat, lon = geometry.y, geometry.x
+            except Exception as exc:
+                from aihydro_data.exceptions import GeometryInvalid
+                raise GeometryInvalid(
+                    code="OPEN_METEO_GEOMETRY_INVALID",
+                    message=f"Cannot extract centroid from geometry: {exc}",
+                    recovery="Pass a valid Shapely geometry (Point, Polygon, etc.).",
+                    next_tools=["data_help"],
+                    docs_anchor="geometry",
+                ) from exc
+
+        om_variable = cfg["om_variable"]
+        result_col  = cfg["result_column"]
+
+        url = "https://archive-api.open-meteo.com/v1/archive"
+        params = {
+            "latitude":  round(lat, 4),
+            "longitude": round(lon, 4),
+            "start_date": start,
+            "end_date":   end,
+            "daily":      om_variable,
+            "timezone":   "UTC",
+        }
+
+        log.debug(
+            "Open-Meteo: fetching %s at (%.4f, %.4f) for %s–%s",
+            om_variable, lat, lon, start, end,
+        )
+
+        try:
+            resp = requests.get(url, params=params, timeout=30)
+        except Exception as exc:
+            raise SourceUnavailable(
+                code="OPEN_METEO_CONNECT_FAILED",
+                message=f"Open-Meteo request failed: {exc}",
+                recovery=(
+                    "Check your internet connection. "
+                    "Open-Meteo is free and auth-free — no credentials needed."
+                ),
+                next_tools=["data_doctor"],
+                docs_anchor="products#open-meteo",
+            ) from exc
+
+        if resp.status_code != 200:
+            raise SourceUnavailable(
+                code="OPEN_METEO_HTTP_ERROR",
+                message=(
+                    f"Open-Meteo returned HTTP {resp.status_code}: {resp.text[:200]}"
+                ),
+                recovery="Verify the date range and geometry coordinates.",
+                next_tools=["data_doctor"],
+                docs_anchor="products#open-meteo",
+            )
+
+        payload = resp.json()
+        daily = payload.get("daily", {})
+        times  = daily.get("time", [])
+        values = daily.get(om_variable, [])
+
+        if not times or not values:
+            log.warning(
+                "Open-Meteo: empty response for %s at (%.4f, %.4f) %s–%s.",
+                om_variable, lat, lon, start, end,
+            )
+            return pd.DataFrame(columns=["date", result_col])
+
+        df = pd.DataFrame({
+            "date":    pd.to_datetime(times),
+            result_col: [float(v) if v is not None else float("nan") for v in values],
+        })
+
+        # Apply optional unit conversion (cfg key: "unit_conversion", default 1.0)
+        scale = cfg.get("unit_conversion", 1.0)
+        if scale != 1.0:
+            df[result_col] = df[result_col] * scale
+
+        df = df.dropna(subset=[result_col]).reset_index(drop=True)
+
+        log.debug(
+            "Open-Meteo: returned %d days of %s, mean=%.2f.",
+            len(df), result_col, df[result_col].mean() if len(df) else float("nan"),
         )
         return df
 

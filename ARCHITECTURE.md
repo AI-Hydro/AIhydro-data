@@ -209,7 +209,7 @@ cache/
 └── __init__.py     ← diskcache.Cache at ~/.aihydro/cache/data/
 ```
 
-Cache key = `sha256(json({variable, start, end, aggregation, geom_wkt}))`. For manual mode, the `product` ID is also included in the key (different product = different cached result). For auto mode it is excluded (same data regardless of which product was selected).
+Cache key = `aihydro_core.primitives.hashing.content_hash({variable, start, end, aggregation, geom_wkt}, length=24)` — i.e. `sha256(json(...))` truncated to 24 chars, computed by the shared `aihydro-core` substrate so every layer of the platform (jobs, features, this cache) hashes through **one** implementation and keys never drift. For manual mode, the `product` ID is also included in the payload (different product = different cached result). For auto mode it is excluded (same data regardless of which product was selected).
 
 Cache entries also write a manifest row via `cache/manifest.py` with: `product_id`, `source`, `license`, `citation`, `fetched_at`, `entry_count_rows`. This lets `data_get_cache_status()` report provenance without loading the actual data.
 

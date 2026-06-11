@@ -33,41 +33,60 @@ PRODUCT_POLICY: dict[tuple[str, str], list[str]] = {
     ("precipitation", "global"):        ["CHIRPS", "IMERG_PRECIP", "ERA5L_PRECIP", "CHIRPS_IRI"],
 
     # ── Temperature (max) ─────────────────────────────────────────────────
-    ("tmax", "CONUS"):                  ["GRIDMET_TMAX", "DAYMET_TMAX", "ERA5L_TMAX"],
-    ("tmax", "NORTH_AMERICA"):          ["DAYMET_TMAX", "ERA5L_TMAX"],
-    ("tmax", "global"):                 ["ERA5L_TMAX"],
+    # OPEN_METEO_TMAX is the auth-free non-GEE fallback (last in every chain).
+    # It activates automatically when GEE is unavailable (no credentials, quota
+    # exhausted, etc.). Centroid-based ~25 km ERA5 resolution — good enough for
+    # basin-mean forcing even when GEE can't serve a finer-resolution product.
+    ("tmax", "CONUS"):                  ["GRIDMET_TMAX", "DAYMET_TMAX", "ERA5L_TMAX", "OPEN_METEO_TMAX"],
+    ("tmax", "NORTH_AMERICA"):          ["DAYMET_TMAX", "ERA5L_TMAX", "OPEN_METEO_TMAX"],
+    ("tmax", "global"):                 ["ERA5L_TMAX", "OPEN_METEO_TMAX"],
 
     # ── Temperature (min) ─────────────────────────────────────────────────
-    ("tmin", "CONUS"):                  ["GRIDMET_TMIN", "DAYMET_TMIN", "ERA5L_TMIN"],
-    ("tmin", "NORTH_AMERICA"):          ["DAYMET_TMIN", "ERA5L_TMIN"],
-    ("tmin", "global"):                 ["ERA5L_TMIN"],
+    ("tmin", "CONUS"):                  ["GRIDMET_TMIN", "DAYMET_TMIN", "ERA5L_TMIN", "OPEN_METEO_TMIN"],
+    ("tmin", "NORTH_AMERICA"):          ["DAYMET_TMIN", "ERA5L_TMIN", "OPEN_METEO_TMIN"],
+    ("tmin", "global"):                 ["ERA5L_TMIN", "OPEN_METEO_TMIN"],
 
     # ── Temperature (mean) ────────────────────────────────────────────────
     ("tmean", "global"):                ["ERA5L_TMEAN"],
 
     # ── Streamflow ────────────────────────────────────────────────────────
-    ("streamflow", "CONUS"):            ["NWIS_STREAMFLOW"],
-    # Global streamflow (GRDC) lands in Phase 4
-    # ("streamflow", "global"):         ["GRDC_STREAMFLOW"],
+    # CONUS prefers observed gauges (NWIS); then modelled global sources in
+    # order of robustness: GEOGLOWS (open S3, no auth/queue, reach-level) →
+    # Open-Meteo (instant REST GloFAS v4, availability cushion) → GloFAS/EWDS
+    # (auth + async queue, last resort).
+    ("streamflow", "CONUS"):            ["NWIS_STREAMFLOW", "GEOGLOWS_RETRO", "OPENMETEO_FLOOD", "GLOFAS_STREAMFLOW"],
+    # Everywhere else: same modelled chain, no observed gauges.
+    ("streamflow", "global"):           ["GEOGLOWS_RETRO", "OPENMETEO_FLOOD", "GLOFAS_STREAMFLOW"],
 
     # ── Land Cover ────────────────────────────────────────────────────────
-    ("landcover", "CONUS"):             ["NLCD", "ESA_WORLDCOVER", "DYNAMIC_WORLD", "ESA_WORLDCOVER_STAC"],
-    ("landcover", "NORTH_AMERICA"):     ["NLCD", "ESA_WORLDCOVER", "DYNAMIC_WORLD", "ESA_WORLDCOVER_STAC"],
-    ("landcover", "global"):            ["ESA_WORLDCOVER", "DYNAMIC_WORLD", "ESA_WORLDCOVER_STAC"],
+    # DYNAMIC_WORLD removed from all chains: its GEE driver requires a temporal
+    # mode-composite that is not yet implemented (fetch_raster only handles static
+    # mosaics). ESA_WORLDCOVER (GEE ImageCollection mosaic) is the global primary;
+    # ESA_WORLDCOVER_STAC (Planetary Computer) is the auth-free fallback.
+    ("landcover", "CONUS"):             ["NLCD", "ESA_WORLDCOVER", "ESA_WORLDCOVER_STAC"],
+    ("landcover", "NORTH_AMERICA"):     ["NLCD", "ESA_WORLDCOVER", "ESA_WORLDCOVER_STAC"],
+    ("landcover", "global"):            ["ESA_WORLDCOVER", "ESA_WORLDCOVER_STAC"],
 
     # ── Soil ─────────────────────────────────────────────────────────────
     ("soil", "CONUS"):                  ["POLARIS", "SOILGRIDS"],
     ("soil", "global"):                 ["SOILGRIDS"],
 
     # ── Evapotranspiration ────────────────────────────────────────────────
+    # OPEN_METEO_PET (FAO-56 ET0) is the auth-free non-GEE fallback for pet —
+    # last in every chain so it only activates when ERA5L/MOD16 (GEE) fail.
     ("et",  "CONUS"):                   ["MOD16_ET",  "TERRACLIMATE_AET",  "ERA5L_PET"],
     ("et",  "global"):                  ["MOD16_ET",  "TERRACLIMATE_AET",  "ERA5L_PET"],
-    ("pet", "CONUS"):                   ["GRIDMET_PET", "MOD16_PET", "ERA5L_PET"],
-    ("pet", "global"):                  ["ERA5L_PET", "MOD16_PET"],
+    ("pet", "CONUS"):                   ["GRIDMET_PET", "MOD16_PET", "ERA5L_PET", "OPEN_METEO_PET"],
+    ("pet", "global"):                  ["ERA5L_PET", "MOD16_PET", "OPEN_METEO_PET"],
 
     # ── DEM ───────────────────────────────────────────────────────────────
-    ("dem", "CONUS"):                   ["DEM3DEP_10M", "GLO30", "SRTM", "GLO30_STAC"],
-    ("dem", "NORTH_AMERICA"):           ["DEM3DEP_10M", "GLO30", "SRTM", "GLO30_STAC"],
+    # DEM3DEP_10M (py3dep/HyRiver) moved to second position: its OGC WCS request
+    # times out on polygon inputs > ~500 km² (benchmark: 2276 km² → TimeoutError).
+    # GLO30 (GEE, 30 m) is reliable for any size and serves as the primary CONUS
+    # source; DEM3DEP_10M remains in the chain for callers who pin it manually or
+    # need 10 m resolution on small basins where it succeeds.
+    ("dem", "CONUS"):                   ["GLO30", "DEM3DEP_10M", "SRTM", "GLO30_STAC"],
+    ("dem", "NORTH_AMERICA"):           ["GLO30", "DEM3DEP_10M", "SRTM", "GLO30_STAC"],
     ("dem", "global"):                  ["GLO30", "SRTM", "MERIT_DEM", "GLO30_STAC"],
 
     # ── Soil Moisture ─────────────────────────────────────────────────────

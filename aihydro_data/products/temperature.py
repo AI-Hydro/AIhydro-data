@@ -9,6 +9,8 @@ IDs:
     ERA5L_TMAX      – Global daily max temp, ~11 km, GEE
     ERA5L_TMIN      – Global daily min temp, ~11 km, GEE
     ERA5L_TMEAN     – Global daily mean temp, ~11 km, GEE
+    OPEN_METEO_TMAX – Global daily max temp, ~25 km, Open-Meteo (no auth)
+    OPEN_METEO_TMIN – Global daily min temp, ~25 km, Open-Meteo (no auth)
 """
 from __future__ import annotations
 
@@ -63,6 +65,19 @@ _DAYMET_BIBTEX = (
     "  publisher = {ORNL DAAC},\n"
     "  year      = {2022},\n"
     "  doi       = {10.3334/ORNLDAAC/2129}\n"
+    "}"
+)
+_OPEN_METEO_CITATION = (
+    "Zippenfenig, P. (2023). Open-Meteo.com Weather API. "
+    "Zenodo. https://doi.org/10.5281/zenodo.7970649"
+)
+_OPEN_METEO_BIBTEX = (
+    "@dataset{zippenfenig2023openmeteo,\n"
+    "  author    = {Zippenfenig, Patrick},\n"
+    "  title     = {{Open-Meteo.com} Weather {API}},\n"
+    "  publisher = {Zenodo},\n"
+    "  year      = {2023},\n"
+    "  doi       = {10.5281/zenodo.7970649}\n"
     "}"
 )
 
@@ -241,6 +256,75 @@ PRODUCTS: list[ProductSpec] = [
             "band": "temperature_2m",
             "scale_m": 11132,
             "unit_conversion": 1.0,
+        },
+    ),
+
+    # ── Open-Meteo ERA5 reanalysis (no auth, global, 1940-present) ────────
+    # Auth-free fallback for tmax/tmin when GEE is unavailable or unauthed.
+    # Uses centroid-based basin_mean approximation (~0.25° ERA5 resolution).
+    # Only `requests` is required — already a core dependency.
+    ProductSpec(
+        id="OPEN_METEO_TMAX",
+        variable="tmax",
+        source="direct_api",
+        source_dataset_id="open-meteo-era5",
+        coverage=["global"],
+        temporal_start="1940-01-01",
+        temporal_end="present",
+        resolution_m=25000,
+        timestep="daily",
+        units="degC",
+        license="CC BY 4.0 (Open-Meteo) / Copernicus (ERA5 data)",
+        citation=_OPEN_METEO_CITATION,
+        bibtex=_OPEN_METEO_BIBTEX,
+        homepage="https://open-meteo.com/",
+        requires_extras=[],
+        requires_auth=[],
+        common_pitfalls=[
+            "Centroid-based — not a true spatial mean for large basins.",
+            "~25 km resolution (ERA5 grid); finer-resolution products preferred.",
+            "PET is returned in mm/day (FAO-56 Penman-Monteith reference ET0).",
+        ],
+        examples=[
+            "fetch('tmax', gdf, '2000-01-01', '2020-12-31', mode='manual', product='OPEN_METEO_TMAX')",
+        ],
+        next_steps=_TEMP_NEXT_STEPS,
+        backend_config={
+            "service": "open_meteo",
+            "om_variable": "temperature_2m_max",
+            "result_column": "tmax",
+        },
+    ),
+
+    ProductSpec(
+        id="OPEN_METEO_TMIN",
+        variable="tmin",
+        source="direct_api",
+        source_dataset_id="open-meteo-era5",
+        coverage=["global"],
+        temporal_start="1940-01-01",
+        temporal_end="present",
+        resolution_m=25000,
+        timestep="daily",
+        units="degC",
+        license="CC BY 4.0 (Open-Meteo) / Copernicus (ERA5 data)",
+        citation=_OPEN_METEO_CITATION,
+        bibtex=_OPEN_METEO_BIBTEX,
+        homepage="https://open-meteo.com/",
+        requires_extras=[],
+        requires_auth=[],
+        common_pitfalls=[
+            "Centroid-based — not a true spatial mean for large basins.",
+            "~25 km resolution (ERA5 grid); finer-resolution products preferred.",
+        ],
+        examples=[
+            "fetch('tmin', gdf, '2000-01-01', '2020-12-31', mode='manual', product='OPEN_METEO_TMIN')",
+        ],
+        next_steps=_TEMP_NEXT_STEPS,
+        backend_config={
+            "service": "open_meteo",
+            "om_variable": "temperature_2m_min",
+            "result_column": "tmin",
         },
     ),
 ]

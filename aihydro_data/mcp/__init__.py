@@ -85,6 +85,46 @@ def _result_to_dict(result: Any) -> dict[str, Any]:
 
 # ── tool implementations ──────────────────────────────────────────────────────
 
+# ── Backends that block for minutes (queued HPC) ─────────────────────────────
+# If the resolved product routes to one of these sources, data_fetch returns
+# an immediate redirect to data_fetch_background (the async job-dispatch tool)
+# instead of blocking the agent loop for minutes while the queue drains.
+_QUEUED_SOURCES: frozenset[str] = frozenset({
+    "cds_glofas",    # GloFAS EWDS — queued Copernicus HPC, typically 1–30 min
+})
+
+
+def _would_route_to_queued_source(variable: str, geometry: Any, product: str | None) -> tuple[bool, str]:
+    """Return (True, source_id) if the request would route to a queued backend.
+
+    Uses the routing layer (detect_region + resolve_product_ids + registry) without
+    making any network call. Safe to call before the actual fetch.
+    Returns (False, '') when the route is fast or cannot be determined.
+    """
+    try:
+        from aihydro_data.routing import detect_region, resolve_product_ids
+        from aihydro_data.products import get_product
+        from aihydro_data.geometry import coerce_geometry
+
+        geom = coerce_geometry(geometry)
+        region = detect_region(geom)
+        if product:
+            candidates = [product]
+        else:
+            candidates = resolve_product_ids(variable, region)
+
+        for pid in candidates:
+            try:
+                spec = get_product(pid)
+                if spec.source in _QUEUED_SOURCES:
+                    return True, spec.source
+            except KeyError:
+                continue
+    except Exception:
+        pass
+    return False, ""
+
+
 def _data_fetch(
     variable: str,
     geometry: Any,
@@ -118,9 +158,46 @@ def _data_fetch(
         On success: result dict with keys variable, product, source, cache_hit,
                     data (head + shape), license, citation, next_steps.
         On failure: structured error envelope with recovery hints.
+
+    Note — slow backends (GloFAS / queued HPC):
+        For variables that route to a queued backend (e.g. global streamflow →
+        GloFAS EWDS), this tool returns an immediate redirect to
+        ``data_fetch_background`` rather than blocking the agent loop for minutes.
+        Use data_fetch_background() + get_data_fetch_result() for those variables.
     """
     from aihydro_data._pipeline import fetch
     from aihydro_data.exceptions import AihydroDataError
+
+    # ── Pre-flight: redirect queued backends before they block ────────────────
+    # Check if the route resolves to a backend that queues on remote HPC
+    # (e.g. GloFAS on EWDS). If so, return immediately with a redirect message
+    # instead of blocking the entire agent loop for minutes.
+    is_queued, queued_source = _would_route_to_queued_source(variable, geometry, product)
+    if is_queued:
+        return {
+            "error": False,
+            "redirect": True,
+            "code": "USE_ASYNC_TOOL",
+            "message": (
+                f"data_fetch cannot be used for variable='{variable}' in this region — "
+                f"it routes to '{queued_source}', a queued backend that takes 1–30 minutes "
+                "and would block the agent loop. Use data_fetch_background() instead."
+            ),
+            "action": "Use data_fetch_background() with the same arguments, then poll "
+                      "with get_data_fetch_result(job_id) every 60 s until status='complete'.",
+            "example_call": {
+                "tool": "data_fetch_background",
+                "arguments": {
+                    "variable": variable,
+                    "geometry": geometry,
+                    "start": start,
+                    "end": end,
+                    **({"product": product} if product else {}),
+                    "aggregation": aggregation,
+                },
+            },
+            "next_tools": ["data_fetch_background", "get_data_fetch_result"],
+        }
 
     try:
         result = fetch(
@@ -633,27 +710,27 @@ def register_tools(mcp: Any | None = None) -> None:
     Register all data_* MCP tools on `mcp` (a FastMCP server instance).
 
     Called by the aihydro-tools registry when it discovers this package via
-    the `aihydro.tools` entry-point group. `mcp` is the shared FastMCP
-    singleton from `aihydro_data.mcp.app` or passed in by the caller.
+    the `aihydro.tools` entry-point group: the registry passes in the shared
+    FastMCP singleton (see invoke_plugin_registrars). `mcp` is therefore
+    supplied by the caller in normal operation.
 
-    If called with no argument, try to import the server from the parent
-    aihydro-tools package (if installed). Silently no-ops if fastmcp is
-    absent — raw-Python callers import the functions directly instead.
+    Dependency direction: aihydro-data must NEVER import the ai_hydro tools
+    package (that would be a sideways edge). The host MCP server is injected,
+    not imported. If called with no argument, fall back only to data's OWN
+    server module; otherwise no-op (raw-Python callers import the functions
+    directly).
     """
     if mcp is None:
         try:
             from aihydro_data.mcp.app import get_server
             mcp = get_server()
         except Exception:
-            try:
-                from ai_hydro.mcp.app import mcp as _mcp
-                mcp = _mcp
-            except Exception:
-                log.debug(
-                    "aihydro-data: no FastMCP server found — skipping tool registration. "
-                    "Import data_fetch / data_list_products etc. directly if needed."
-                )
-                return
+            log.debug(
+                "aihydro-data: no FastMCP server passed and no local server module — "
+                "skipping tool registration. Import data_fetch / data_list_products "
+                "etc. directly, or pass an mcp server into register_tools(mcp)."
+            )
+            return
 
     # Register each tool using @mcp.tool() decorator-style via tool()
     tool = getattr(mcp, "tool", None)

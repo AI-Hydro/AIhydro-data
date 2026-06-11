@@ -70,10 +70,23 @@ class Backend(SourceBackend):
         end: str,
         aggregation: AggregationMode,
     ) -> Any:
-        """Return a pd.DataFrame with columns ['date', spec.variable]."""
+        """Return a pd.DataFrame with columns ['date', spec.variable].
+
+        Automatic geometry simplification
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        GEE's ``reduceRegion`` API rejects requests whose payload (the ROI
+        GeoJSON) exceeds 10 MB — which happens with very complex polygon
+        boundaries (e.g. MERIT-Basins vector topology on a continental-scale
+        watershed).  When that error is detected the call is retried with a
+        progressively simplified geometry (Shapely ``simplify`` at tolerances
+        0.001°, 0.01°, 0.05°).  Area error from the most aggressive tolerance
+        (0.05° ≈ 5 km at mid-latitudes) is tiny relative to the GEE native
+        resolution (ERA5-Land: 9 km, CHIRPS: 5.5 km, MODIS: 250-500 m).  If
+        all simplification levels still exceed the limit a ``FetchTooLarge``
+        structured error is raised.
+        """
         self._assert_available()
 
-        roi_geojson = self._geom_to_geojson(geometry)
         spatial_reducer, temporal_agg = _aggregation_to_gee(aggregation)
 
         cfg = spec.backend_config
@@ -88,67 +101,138 @@ class Backend(SourceBackend):
 
         from aihydro_data.sources._retry import call_with_retry
 
-        if compute_ndvi:
-            # Sentinel-2 / Landsat NDVI: compute (NIR - Red) / (NIR + Red)
-            # on-the-fly server-side, with optional QA/cloud filtering.
-            result = call_with_retry(
-                lambda: self._extract_computed_ndvi(
-                    dataset_id=dataset_id,
-                    start=start, end=end,
-                    roi_geojson=roi_geojson,
-                    ndvi_bands=ndvi_bands,
-                    qa_band=qa_band,
-                    max_cloud_pct=max_cloud_pct,
-                    scale_m=scale_m,
-                    spatial_reducer=spatial_reducer,
-                ),
-                label=f"gee.compute_ndvi({dataset_id})",
-            )
-        else:
-            from aihydro_data.sources._gee_vendored.timeseries import extract_timeseries
-            result = call_with_retry(
-                lambda: extract_timeseries(
-                    dataset_id=dataset_id,
-                    band=band,
-                    start_date=start,
-                    end_date=end,
-                    roi_geojson=roi_geojson,
-                    spatial_reducer=spatial_reducer,
-                    temporal_aggregation=temporal_agg,
-                    scale_m=scale_m,
-                ),
-                label=f"gee.extract_timeseries({dataset_id})",
-            )
+        # ── inner: run one GEE call with a specific roi_geojson ──────────
+        # IMPORTANT: the vendored helper swallows GEE errors into
+        # {"ok": False, "message": "..."} rather than raising exceptions.
+        # We promote that to RuntimeError HERE (inside _call_gee) so the
+        # outer retry-with-simplification loop can catch it uniformly.
+        def _call_gee(roi_geojson: dict) -> dict:
+            if compute_ndvi:
+                result = call_with_retry(
+                    lambda: self._extract_computed_ndvi(
+                        dataset_id=dataset_id,
+                        start=start, end=end,
+                        roi_geojson=roi_geojson,
+                        ndvi_bands=ndvi_bands,
+                        qa_band=qa_band,
+                        max_cloud_pct=max_cloud_pct,
+                        scale_m=scale_m,
+                        spatial_reducer=spatial_reducer,
+                    ),
+                    label=f"gee.compute_ndvi({dataset_id})",
+                )
+            else:
+                from aihydro_data.sources._gee_vendored.timeseries import extract_timeseries
+                result = call_with_retry(
+                    lambda: extract_timeseries(
+                        dataset_id=dataset_id,
+                        band=band,
+                        start_date=start,
+                        end_date=end,
+                        roi_geojson=roi_geojson,
+                        spatial_reducer=spatial_reducer,
+                        temporal_aggregation=temporal_agg,
+                        scale_m=scale_m,
+                    ),
+                    label=f"gee.extract_timeseries({dataset_id})",
+                )
+            # Promote {"ok": False} → RuntimeError so the retry loop can catch it.
+            if not result.get("ok", True):
+                raise RuntimeError(
+                    f"GEE fetch failed for {dataset_id}/{band}: "
+                    f"{result.get('message', 'unknown error')}"
+                )
+            return result
 
-        # The vendored helper swallows network/GEE errors into {"ok": False,
-        # "rows": []}. That's unsafe for our pipeline — the fallback chain
-        # never triggers and the user gets an empty DataFrame with no warning.
-        # Promote that to an exception here so fallback can take over.
-        if not result.get("ok", True):
-            raise RuntimeError(
-                f"GEE fetch failed for {dataset_id}/{band}: "
-                f"{result.get('message', 'unknown error')}"
+        # ── attempt GEE call; auto-simplify if geometry is too complex ───
+        # GEE's 10 MB payload limit triggers when the ROI polygon has too many
+        # vertices (e.g. continental-scale MERIT-Basins watersheds).  We retry
+        # with progressively simplified geometries before giving up.
+        _PAYLOAD_LIMIT_MARKER = "payload size exceeds the limit"
+        _SIMPLIFY_TOLERANCES = (0.001, 0.01, 0.05)   # degrees; last ≈ 5 km error
+
+        geom_candidates = [geometry]
+        for tol in _SIMPLIFY_TOLERANCES:
+            simplified = geometry.simplify(tol, preserve_topology=True)
+            geom_candidates.append(simplified)
+
+        result: dict | None = None
+        last_exc: Exception | None = None
+        for attempt, geom_candidate in enumerate(geom_candidates):
+            roi_geojson = self._geom_to_geojson(geom_candidate)
+            try:
+                result = _call_gee(roi_geojson)
+                if attempt > 0:
+                    log.info(
+                        "GEE payload limit: succeeded after geometry simplification "
+                        "(attempt %d, tol=%.3f°, vertices reduced).", attempt,
+                        _SIMPLIFY_TOLERANCES[attempt - 1],
+                    )
+                break
+            except RuntimeError as exc:
+                last_exc = exc
+                if _PAYLOAD_LIMIT_MARKER in str(exc) and attempt < len(geom_candidates) - 1:
+                    log.warning(
+                        "GEE payload limit for %s (attempt %d); retrying with "
+                        "simplified geometry (tol=%.3f°).",
+                        dataset_id, attempt + 1,
+                        _SIMPLIFY_TOLERANCES[attempt] if attempt < len(_SIMPLIFY_TOLERANCES) else "?",
+                    )
+                    continue
+                raise  # non-payload error or last attempt — propagate immediately
+
+        if result is None:
+            # All simplification levels hit the payload limit
+            from aihydro_data.exceptions import FetchTooLarge
+            raise FetchTooLarge(
+                code="GEE_PAYLOAD_LIMIT",
+                message=(
+                    f"GEE payload limit exceeded for {dataset_id} even after "
+                    f"geometry simplification (tolerance up to "
+                    f"{_SIMPLIFY_TOLERANCES[-1]}°). "
+                    f"Basin is likely larger than ~1 M km²."
+                ),
+                recovery=(
+                    "Use a smaller sub-basin, or switch to a non-GEE product "
+                    "(e.g. CHIRPS_IRI for precipitation) that has no geometry-size limit."
+                ),
+                next_tools=["data_list_products"],
             )
 
         import pandas as pd
-        # Vendored API returns rows under "rows", not "timeseries".
         rows = result.get("rows", result.get("timeseries", []))
         df = pd.DataFrame(rows)
         if df.empty:
-            # Genuine empty result from GEE (e.g. ROI off the data grid).
-            # Surface as an explicit error so the fallback chain triggers.
+            # No data returned. Two common causes:
+            #   1. Date window shorter than the dataset's compositing period
+            #      (e.g. 10-day window < MOD13Q1's 16-day composite period).
+            #   2. ROI is outside the dataset's spatial coverage.
+            #   3. Cloud/QA mask removed all observations in the window.
+            import datetime as _dt
+            try:
+                window_days = (_dt.date.fromisoformat(end) - _dt.date.fromisoformat(start)).days
+            except Exception:
+                window_days = None
+            window_hint = (
+                f" The requested window is only {window_days} days — "
+                "try widening to ≥30 days so at least one composite is captured."
+                if window_days is not None and window_days < 30
+                else ""
+            )
             raise RuntimeError(
                 f"GEE returned 0 rows for {dataset_id}/{band} "
-                f"({start}..{end}). ROI likely outside coverage."
+                f"({start}..{end}).{window_hint} "
+                "Check: (a) date window vs. dataset compositing period, "
+                "(b) spatial coverage, (c) cloud/QA masking."
             )
 
         df = df.rename(columns={"value": spec.variable})
-        # Drop nulls *before* unit conversion to avoid NaN * scalar issues
+        # Drop nulls *before* unit conversion to avoid NaN × scalar issues
         df = df.dropna(subset=[spec.variable])
         if df.empty:
             raise RuntimeError(
                 f"GEE returned all-null values for {dataset_id}/{band} "
-                f"({start}..{end}). Likely all pixels masked out."
+                f"({start}..{end}). Likely all pixels masked out by QA/cloud filter."
             )
         if unit_conv != 1.0:
             df[spec.variable] = df[spec.variable] * unit_conv
@@ -177,6 +261,13 @@ class Backend(SourceBackend):
         """
         self._assert_available()
         cfg = spec.backend_config
+
+        # Multi-property soil (SoilGrids): returns an xr.Dataset of texture
+        # fractions rather than a single-band DataArray.
+        if cfg.get("soil_properties"):
+            return self._fetch_soilgrids_raster(
+                spec, geometry, native_resolution=native_resolution,
+            )
 
         if not cfg.get("static"):
             raise NotImplementedError(
@@ -212,6 +303,82 @@ class Backend(SourceBackend):
             da = da * unit_conv
         da.attrs["resolution_m"] = scale_m
         return da
+
+    def _fetch_soilgrids_raster(
+        self,
+        spec: ProductSpec,
+        geometry: Any,
+        *,
+        native_resolution: bool = False,
+    ) -> Any:
+        """Fetch ISRIC SoilGrids texture fractions as an :class:`xarray.Dataset`.
+
+        Each requested property (``sand``, ``silt``, ``clay``, …) is a separate
+        SoilGrids GEE Image (``projects/soilgrids-isric/<prop>_mean``) carrying
+        per-depth bands (e.g. ``sand_0-5cm_mean``).  We select the configured
+        depth band for each property, download it via the shared
+        :meth:`_download_image_array` path, and assemble a Dataset whose
+        ``data_vars`` mirror POLARIS naming (``sand_5``, ``silt_5`` …) so the
+        downstream Curve-Number classifier works unchanged.
+
+        SoilGrids texture units are g/kg; we convert to percent (÷10) so the
+        hydrologic-group thresholds (sand>70 %, clay<10 %, …) apply directly.
+        """
+        self._assert_available()
+        import ee
+        import xarray as xr
+
+        cfg = spec.backend_config
+        collection = cfg.get("gee_collection", "projects/soilgrids-isric")
+        properties: list[str] = list(cfg.get("soil_properties", ["sand", "silt", "clay"]))
+        depth = cfg.get("soil_depth", "0-5cm")
+        depth_suffix = cfg.get("soil_depth_suffix", "5")  # POLARIS-style var suffix
+        scale_m = float(cfg.get("scale_m", 250))
+        # g/kg → % for texture fractions.
+        unit_conv = float(cfg.get("unit_conversion", 0.1))
+
+        roi_geojson = self._geom_to_geojson(geometry)
+        roi = ee.Geometry(roi_geojson)
+
+        ds = xr.Dataset()
+        first_da = None
+        for prop in properties:
+            band = f"{prop}_{depth}_mean"
+            img = ee.Image(f"{collection}/{prop}_mean").select(band)
+            # SoilGrids is stored in Goode Homolosine; getDownloadURL with an
+            # EPSG:4326 region + meters scale returns HTTP 400 against that
+            # native projection. Reproject server-side to EPSG:4326 first so the
+            # download request is well-formed (same grid all other GEE products
+            # already use).
+            img = img.reproject(crs="EPSG:4326", scale=scale_m)
+            da, eff_scale = self._download_image_array(
+                img, roi, roi_geojson, [band], scale_m,
+                native_resolution=native_resolution,
+                label=f"GEE SoilGrids {prop}",
+            )
+            da = da.squeeze(drop=True) * unit_conv
+            var_name = f"{prop}_{depth_suffix}"
+            if first_da is None:
+                first_da = da
+                ds[var_name] = da
+            else:
+                # Co-register to the first property's grid when shapes differ.
+                if da.shape != first_da.shape:
+                    try:
+                        da = da.rio.reproject_match(first_da)
+                    except Exception:
+                        pass
+                ds[var_name] = da
+            scale_m_eff = eff_scale
+
+        ds.attrs["dataset_id"] = collection
+        ds.attrs["resolution_m"] = scale_m_eff
+        try:
+            if first_da is not None and first_da.rio.crs is not None:
+                ds = ds.rio.write_crs(first_da.rio.crs)
+        except Exception:
+            pass
+        return ds
 
     def fetch_multiband_composite(
         self,

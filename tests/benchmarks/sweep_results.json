@@ -1,0 +1,633 @@
+{
+  "africa_congo_full": {
+    "region": "AFRICA",
+    "area_km2": 3604054.04,
+    "delineation_method": "merit_basins_hybrid",
+    "vars": {
+      "precipitation": {
+        "ok": true,
+        "product": "CHIRPS_IRI",
+        "source": "direct_api",
+        "shape": "DataFrame(10, 2)",
+        "n_fallbacks": 0,
+        "secs": 1.8
+      },
+      "streamflow": {
+        "ok": false,
+        "error_type": "RegionUnsupported",
+        "code": "REGION_NO_POLICY",
+        "msg": "[REGION_NO_POLICY] No routing policy for variable='streamflow', region='AFRICA'. Call list_products(variable='streamflow') to see what's available.",
+        "secs": 0.8
+      },
+      "tmax": {
+        "ok": true,
+        "product": "ERA5L_TMAX",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 816.0
+      },
+      "tmin": {
+        "ok": true,
+        "product": "ERA5L_TMIN",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 655.3
+      },
+      "pet": {
+        "ok": true,
+        "product": "ERA5L_PET",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 366.3
+      },
+      "et": {
+        "ok": true,
+        "product": "TERRACLIMATE_AET",
+        "source": "gee",
+        "shape": "DataFrame(1, 2)",
+        "n_fallbacks": 2,
+        "secs": 1340.2
+      },
+      "ndvi": {
+        "ok": false,
+        "error_type": "SourceUnavailable",
+        "code": "ALL_BACKENDS_FAILED",
+        "msg": "[ALL_BACKENDS_FAILED] All candidates failed for variable='ndvi': ['MODIS_NDVI', 'SENTINEL2_NDVI']. Last error: GEE fetch failed for COPERNICUS/S2_SR_HARMONIZED/",
+        "secs": 516.8
+      },
+      "lai": {
+        "ok": false,
+        "error_type": "SourceUnavailable",
+        "code": "ALL_BACKENDS_FAILED",
+        "msg": "[ALL_BACKENDS_FAILED] All candidates failed for variable='lai': ['MODIS_LAI']. Last error: GEE fetch failed for MODIS/061/MCD15A3H/Lai: Failed to extract timese",
+        "secs": 85326.6
+      }
+    }
+  },
+  "europe_alps": {
+    "region": "EUROPE",
+    "area_km2": 2.84,
+    "delineation_method": "merit_gee_pyflwdir",
+    "vars": {
+      "precipitation": {
+        "ok": true,
+        "product": "ERA5L_PRECIP",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 1.0
+      },
+      "tmax": {
+        "ok": true,
+        "product": "ERA5L_TMAX",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 1.3
+      },
+      "tmin": {
+        "ok": true,
+        "product": "ERA5L_TMIN",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 2.0
+      },
+      "pet": {
+        "ok": true,
+        "product": "ERA5L_PET",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 1.1
+      },
+      "et": {
+        "ok": true,
+        "product": "MOD16_ET",
+        "source": "gee",
+        "shape": "DataFrame(1, 2)",
+        "n_fallbacks": 1,
+        "secs": 1.8
+      },
+      "dem": {
+        "ok": true,
+        "product": "GLO30",
+        "source": "gee",
+        "shape": "DataArray(76, 106)",
+        "n_fallbacks": 1,
+        "secs": 3.7
+      },
+      "landcover": {
+        "ok": true,
+        "product": "ESA_WORLDCOVER_STAC",
+        "source": "stac",
+        "shape": "DataArray(153, 217)",
+        "n_fallbacks": 3,
+        "secs": 2.9
+      },
+      "soil": {
+        "ok": true,
+        "product": "SOILGRIDS",
+        "source": "gee",
+        "shape": "Dataset{'x': 13, 'y': 10}",
+        "n_fallbacks": 1,
+        "secs": 2.1
+      },
+      "ndvi": {
+        "ok": false,
+        "error_type": "SourceUnavailable",
+        "code": "ALL_BACKENDS_FAILED",
+        "msg": "[ALL_BACKENDS_FAILED] All candidates failed for variable='ndvi': ['MODIS_NDVI', 'SENTINEL2_NDVI']. Last error: GEE returned 0 rows for COPERNICUS/S2_SR_HARMONIZ",
+        "secs": 1.6
+      },
+      "lai": {
+        "ok": true,
+        "product": "MODIS_LAI",
+        "source": "gee",
+        "shape": "DataFrame(2, 2)",
+        "n_fallbacks": 1,
+        "secs": 0.8
+      },
+      "streamflow": {
+        "ok": false,
+        "error_type": "RegionUnsupported",
+        "code": "REGION_NO_POLICY",
+        "msg": "[REGION_NO_POLICY] No routing policy for variable='streamflow', region='EUROPE'. Call list_products(variable='streamflow') to see what's available.",
+        "secs": 0.0
+      }
+    }
+  },
+  "sasia_nepal": {
+    "region": "S_ASIA",
+    "area_km2": 1.21,
+    "delineation_method": "local_merit_pyflwdir",
+    "vars": {
+      "precipitation": {
+        "ok": true,
+        "product": "CHIRPS",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 0.9
+      },
+      "tmax": {
+        "ok": true,
+        "product": "ERA5L_TMAX",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 2.3
+      },
+      "tmin": {
+        "ok": true,
+        "product": "ERA5L_TMIN",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 0.7
+      },
+      "pet": {
+        "ok": true,
+        "product": "ERA5L_PET",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 0.9
+      },
+      "et": {
+        "ok": true,
+        "product": "MOD16_ET",
+        "source": "gee",
+        "shape": "DataFrame(1, 2)",
+        "n_fallbacks": 1,
+        "secs": 0.8
+      },
+      "dem": {
+        "ok": true,
+        "product": "GLO30",
+        "source": "gee",
+        "shape": "DataArray(50, 50)",
+        "n_fallbacks": 1,
+        "secs": 0.8
+      },
+      "landcover": {
+        "ok": true,
+        "product": "ESA_WORLDCOVER_STAC",
+        "source": "stac",
+        "shape": "DataArray(132, 132)",
+        "n_fallbacks": 3,
+        "secs": 1.6
+      },
+      "soil": {
+        "ok": true,
+        "product": "SOILGRIDS",
+        "source": "gee",
+        "shape": "Dataset{'x': 6, 'y': 7}",
+        "n_fallbacks": 1,
+        "secs": 2.2
+      },
+      "ndvi": {
+        "ok": true,
+        "product": "SENTINEL2_NDVI",
+        "source": "gee",
+        "shape": "DataFrame(3, 2)",
+        "n_fallbacks": 2,
+        "secs": 2.1
+      },
+      "lai": {
+        "ok": true,
+        "product": "MODIS_LAI",
+        "source": "gee",
+        "shape": "DataFrame(2, 2)",
+        "n_fallbacks": 1,
+        "secs": 2.7
+      },
+      "streamflow": {
+        "ok": false,
+        "error_type": "RegionUnsupported",
+        "code": "REGION_NO_POLICY",
+        "msg": "[REGION_NO_POLICY] No routing policy for variable='streamflow', region='S_ASIA'. Call list_products(variable='streamflow') to see what's available.",
+        "secs": 0.0
+      }
+    }
+  },
+  "samerica_andes": {
+    "region": "SOUTH_AMERICA",
+    "area_km2": 3.83,
+    "delineation_method": "local_merit_pyflwdir",
+    "vars": {
+      "precipitation": {
+        "ok": true,
+        "product": "CHIRPS",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 2.0
+      },
+      "tmax": {
+        "ok": true,
+        "product": "ERA5L_TMAX",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 2.0
+      },
+      "tmin": {
+        "ok": true,
+        "product": "ERA5L_TMIN",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 0.8
+      },
+      "pet": {
+        "ok": true,
+        "product": "ERA5L_PET",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 0.8
+      },
+      "et": {
+        "ok": true,
+        "product": "MOD16_ET",
+        "source": "gee",
+        "shape": "DataFrame(1, 2)",
+        "n_fallbacks": 1,
+        "secs": 0.8
+      },
+      "dem": {
+        "ok": true,
+        "product": "GLO30",
+        "source": "gee",
+        "shape": "DataArray(143, 54)",
+        "n_fallbacks": 1,
+        "secs": 1.2
+      },
+      "landcover": {
+        "ok": true,
+        "product": "ESA_WORLDCOVER_STAC",
+        "source": "stac",
+        "shape": "DataArray(416, 155)",
+        "n_fallbacks": 3,
+        "secs": 1.5
+      },
+      "soil": {
+        "ok": true,
+        "product": "SOILGRIDS",
+        "source": "gee",
+        "shape": "Dataset{'x': 7, 'y': 18}",
+        "n_fallbacks": 1,
+        "secs": 2.0
+      },
+      "ndvi": {
+        "ok": true,
+        "product": "SENTINEL2_NDVI",
+        "source": "gee",
+        "shape": "DataFrame(1, 2)",
+        "n_fallbacks": 2,
+        "secs": 1.6
+      },
+      "lai": {
+        "ok": true,
+        "product": "MODIS_LAI",
+        "source": "gee",
+        "shape": "DataFrame(2, 2)",
+        "n_fallbacks": 1,
+        "secs": 2.2
+      },
+      "streamflow": {
+        "ok": false,
+        "error_type": "RegionUnsupported",
+        "code": "REGION_NO_POLICY",
+        "msg": "[REGION_NO_POLICY] No routing policy for variable='streamflow', region='SOUTH_AMERICA'. Call list_products(variable='streamflow') to see what's available.",
+        "secs": 0.0
+      }
+    }
+  },
+  "australia_se": {
+    "region": "OCEANIA",
+    "area_km2": 3.92,
+    "delineation_method": "merit_gee_pyflwdir",
+    "vars": {
+      "precipitation": {
+        "ok": true,
+        "product": "CHIRPS",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 1.0
+      },
+      "tmax": {
+        "ok": true,
+        "product": "ERA5L_TMAX",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 0.8
+      },
+      "tmin": {
+        "ok": true,
+        "product": "ERA5L_TMIN",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 0.7
+      },
+      "pet": {
+        "ok": true,
+        "product": "ERA5L_PET",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 1,
+        "secs": 0.7
+      },
+      "et": {
+        "ok": true,
+        "product": "MOD16_ET",
+        "source": "gee",
+        "shape": "DataFrame(1, 2)",
+        "n_fallbacks": 1,
+        "secs": 0.8
+      },
+      "dem": {
+        "ok": true,
+        "product": "GLO30",
+        "source": "gee",
+        "shape": "DataArray(76, 153)",
+        "n_fallbacks": 1,
+        "secs": 1.2
+      },
+      "landcover": {
+        "ok": true,
+        "product": "ESA_WORLDCOVER_STAC",
+        "source": "stac",
+        "shape": "DataArray(180, 367)",
+        "n_fallbacks": 3,
+        "secs": 2.9
+      },
+      "soil": {
+        "ok": true,
+        "product": "SOILGRIDS",
+        "source": "gee",
+        "shape": "Dataset{'x': 19, 'y': 10}",
+        "n_fallbacks": 1,
+        "secs": 4.1
+      },
+      "ndvi": {
+        "ok": true,
+        "product": "SENTINEL2_NDVI",
+        "source": "gee",
+        "shape": "DataFrame(2, 2)",
+        "n_fallbacks": 2,
+        "secs": 1.7
+      },
+      "lai": {
+        "ok": true,
+        "product": "MODIS_LAI",
+        "source": "gee",
+        "shape": "DataFrame(2, 2)",
+        "n_fallbacks": 1,
+        "secs": 0.8
+      },
+      "streamflow": {
+        "ok": false,
+        "error_type": "RegionUnsupported",
+        "code": "REGION_NO_POLICY",
+        "msg": "[REGION_NO_POLICY] No routing policy for variable='streamflow', region='OCEANIA'. Call list_products(variable='streamflow') to see what's available.",
+        "secs": 0.0
+      }
+    }
+  },
+  "conus_boulder": {
+    "region": "CONUS",
+    "area_km2": 2276.49,
+    "delineation_method": "nldi_comid",
+    "vars": {
+      "precipitation": {
+        "ok": true,
+        "product": "GRIDMET_PRECIP",
+        "source": "hyriver",
+        "shape": "DataFrame(10, 2)",
+        "n_fallbacks": 0,
+        "secs": 0.6
+      },
+      "tmax": {
+        "ok": true,
+        "product": "GRIDMET_TMAX",
+        "source": "hyriver",
+        "shape": "DataFrame(10, 2)",
+        "n_fallbacks": 0,
+        "secs": 0.0
+      },
+      "tmin": {
+        "ok": true,
+        "product": "GRIDMET_TMIN",
+        "source": "hyriver",
+        "shape": "DataFrame(10, 2)",
+        "n_fallbacks": 0,
+        "secs": 0.0
+      },
+      "pet": {
+        "ok": true,
+        "product": "GRIDMET_PET",
+        "source": "hyriver",
+        "shape": "DataFrame(10, 2)",
+        "n_fallbacks": 0,
+        "secs": 0.0
+      },
+      "et": {
+        "ok": true,
+        "product": "MOD16_ET",
+        "source": "gee",
+        "shape": "DataFrame(1, 2)",
+        "n_fallbacks": 0,
+        "secs": 0.0
+      },
+      "dem": {
+        "ok": true,
+        "product": "GLO30",
+        "source": "gee",
+        "shape": "DataArray(1675, 2680)",
+        "n_fallbacks": 1,
+        "secs": 8.2
+      },
+      "landcover": {
+        "ok": true,
+        "product": "NLCD",
+        "source": "hyriver",
+        "shape": "Dataset{'x': 2060, 'y': 1671}",
+        "n_fallbacks": 1,
+        "secs": 4.6
+      },
+      "soil": {
+        "ok": true,
+        "product": "POLARIS",
+        "source": "hyriver",
+        "shape": "Dataset{'x': 2600, 'y': 1624}",
+        "n_fallbacks": 1,
+        "secs": 18.3
+      },
+      "ndvi": {
+        "ok": true,
+        "product": "SENTINEL2_NDVI",
+        "source": "gee",
+        "shape": "DataFrame(6, 2)",
+        "n_fallbacks": 0,
+        "secs": 0.0
+      },
+      "lai": {
+        "ok": true,
+        "product": "MODIS_LAI",
+        "source": "gee",
+        "shape": "DataFrame(2, 2)",
+        "n_fallbacks": 0,
+        "secs": 0.0
+      },
+      "streamflow": {
+        "ok": false,
+        "error_type": "SourceUnavailable",
+        "code": "ALL_BACKENDS_FAILED",
+        "msg": "[ALL_BACKENDS_FAILED] All candidates failed for variable='streamflow': ['NWIS_STREAMFLOW']. Last error: [NWIS_NO_GAUGE_ID] NWIS fetch requires a USGS gauge ID. ",
+        "secs": 0.7
+      }
+    }
+  },
+  "africa_congo_trib": {
+    "region": "AFRICA",
+    "area_km2": 31.68,
+    "delineation_method": "merit_gee_pyflwdir",
+    "vars": {
+      "precipitation": {
+        "ok": true,
+        "product": "CHIRPS",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 0,
+        "secs": 0.0
+      },
+      "tmax": {
+        "ok": true,
+        "product": "ERA5L_TMAX",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 0,
+        "secs": 0.0
+      },
+      "tmin": {
+        "ok": true,
+        "product": "ERA5L_TMIN",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 0,
+        "secs": 0.0
+      },
+      "pet": {
+        "ok": true,
+        "product": "ERA5L_PET",
+        "source": "gee",
+        "shape": "DataFrame(9, 2)",
+        "n_fallbacks": 0,
+        "secs": 0.0
+      },
+      "et": {
+        "ok": true,
+        "product": "MOD16_ET",
+        "source": "gee",
+        "shape": "DataFrame(1, 2)",
+        "n_fallbacks": 0,
+        "secs": 0.0
+      },
+      "dem": {
+        "ok": true,
+        "product": "GLO30",
+        "source": "gee",
+        "shape": "DataArray(332, 208)",
+        "n_fallbacks": 1,
+        "secs": 1.5
+      },
+      "landcover": {
+        "ok": true,
+        "product": "ESA_WORLDCOVER",
+        "source": "gee",
+        "shape": "DataArray(994, 623)",
+        "n_fallbacks": 1,
+        "secs": 1.2
+      },
+      "soil": {
+        "ok": true,
+        "product": "SOILGRIDS",
+        "source": "gee",
+        "shape": "Dataset{'x': 26, 'y': 41}",
+        "n_fallbacks": 1,
+        "secs": 2.2
+      },
+      "ndvi": {
+        "ok": true,
+        "product": "SENTINEL2_NDVI",
+        "source": "gee",
+        "shape": "DataFrame(3, 2)",
+        "n_fallbacks": 0,
+        "secs": 0.0
+      },
+      "lai": {
+        "ok": true,
+        "product": "MODIS_LAI",
+        "source": "gee",
+        "shape": "DataFrame(2, 2)",
+        "n_fallbacks": 0,
+        "secs": 0.0
+      },
+      "streamflow": {
+        "ok": false,
+        "error_type": "RegionUnsupported",
+        "code": "REGION_NO_POLICY",
+        "msg": "[REGION_NO_POLICY] No routing policy for variable='streamflow', region='AFRICA'. Call list_products(variable='streamflow') to see what's available.",
+        "secs": 0.0
+      }
+    }
+  }
+}

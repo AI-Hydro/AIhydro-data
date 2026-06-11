@@ -35,7 +35,10 @@ CoverageTag = Literal[
 ]
 
 # Backend identifiers. Each one corresponds to a module in sources/.
-SourceId = Literal["gee", "stac", "hyriver", "direct_api", "local_cache"]
+SourceId = Literal[
+    "gee", "stac", "hyriver", "direct_api", "local_cache",
+    "cds_glofas", "geoglows_retro", "openmeteo_flood",
+]
 
 # Aggregation modes a user can request.
 AggregationMode = Literal[
@@ -147,6 +150,14 @@ class FetchResult(BaseModel):
     # Agent-facing affordances
     next_steps: list[dict[str, str]] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+
+    # Decision trail — mirrors delineation/router.py's fallback_history. Each
+    # entry records one candidate the router considered, in order:
+    #   {"product": str, "source": str, "outcome": "served"|"failed"|"rejected",
+    #    "reason": str}
+    # The final entry's outcome is always "served" (the product that won). This
+    # lets agents see *why* a particular backend was chosen, not just which one.
+    fallback_history: list[dict[str, str]] = Field(default_factory=list)
 
     def help(self) -> str:
         """REPL convenience: return a short usage summary for this result."""

@@ -97,8 +97,10 @@ class TestDemProducts:
 
     def test_policy_dem_conus(self):
         ids = _policy("dem", "CONUS")
-        assert ids[0] == "DEM3DEP_10M"
-        assert "GLO30" in ids
+        # GLO30 is now primary for CONUS (DEM3DEP_10M times out on polygon
+        # inputs > ~500 km² — benchmark confirmed; kept in chain as fallback).
+        assert ids[0] == "GLO30"
+        assert "DEM3DEP_10M" in ids
 
     def test_policy_dem_global(self):
         ids = _policy("dem", "global")

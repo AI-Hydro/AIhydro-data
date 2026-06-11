@@ -37,6 +37,84 @@ _GRIDMET_VAR_MAP = {
 }
 
 
+# Discrete NLCD epochs (cover product). Caller-requested years snap to the
+# nearest available epoch so a request for e.g. 2019 hits the real product.
+_NLCD_YEARS = (2001, 2004, 2006, 2008, 2011, 2013, 2016, 2019, 2021)
+
+
+def _nearest_nlcd_year(start: str, default: int = 2019) -> int:
+    """Snap a requested year (from an ISO start date) to the nearest NLCD epoch."""
+    try:
+        requested = int(str(start)[:4])
+    except (ValueError, TypeError):
+        return default
+    return min(_NLCD_YEARS, key=lambda y: abs(y - requested))
+
+
+def _find_time_dim(data: Any) -> str:
+    """Identify the time dimension of an xarray object.
+
+    Prefers conventionally-named dims, then any dim whose coordinate is
+    datetime64, then falls back to the first dim.
+    """
+    import numpy as np
+
+    for cand in ("time", "date", "T", "day", "Time"):
+        if cand in data.dims:
+            return cand
+    for d in data.dims:
+        if d in data.coords:
+            vals = np.asarray(data[d].values)
+            if np.issubdtype(vals.dtype, np.datetime64):
+                return d
+    return list(data.dims)[0]
+
+
+def _basin_aggregate_to_frame(data: Any, var_key: str, how: str = "mean") -> Any:
+    """Reduce a gridded fetch to a tidy basin-aggregated ``[date, var_key]`` frame.
+
+    ``pygridmet`` / ``pydaymet`` ``get_bygeom`` return an :class:`xarray.Dataset`
+    (dims ``time × y × x``), NOT a pixel-columned DataFrame — so a pandas-style
+    ``.mean(axis=1)`` raises ``ValueError: passing 'axis' to Dataset reduce
+    methods is ambiguous``. This helper reduces over the SPATIAL dims with
+    ``dim=[...]`` (the xarray-correct call) and returns a tidy DataFrame the
+    downstream normaliser can consume. A legacy pandas DataFrame input still
+    works (per-pixel columns → ``axis=1`` reduction) for forward-compatibility.
+    """
+    import pandas as pd
+
+    # Legacy / defensive: a pixel-columned DataFrame.
+    if isinstance(data, pd.DataFrame):
+        reduced = data.mean(axis=1) if how == "mean" else data.sum(axis=1)
+        out = reduced.to_frame(name=var_key).reset_index()
+        out = out.rename(columns={out.columns[0]: "date"})
+        return out[["date", var_key]]
+
+    import xarray as xr
+
+    if isinstance(data, (xr.Dataset, xr.DataArray)):
+        time_dim = _find_time_dim(data)
+        spatial_dims = [d for d in data.dims if d != time_dim]
+        if spatial_dims:
+            reduced = (
+                data.mean(dim=spatial_dims) if how == "mean"
+                else data.sum(dim=spatial_dims)
+            )
+        else:
+            reduced = data
+        if isinstance(reduced, xr.Dataset):
+            name = var_key if var_key in reduced.data_vars else list(reduced.data_vars)[0]
+            reduced = reduced[name]
+        series = reduced.to_series().rename(var_key)
+        out = series.reset_index()
+        out = out.rename(columns={time_dim: "date"})
+        return out[["date", var_key]]
+
+    raise TypeError(
+        f"_basin_aggregate_to_frame: unexpected input type {type(data).__name__}"
+    )
+
+
 class Backend(SourceBackend):
     """HyRiver backend (pygridmet + pydaymet)."""
 
@@ -158,11 +236,12 @@ class Backend(SourceBackend):
                 ),
                 label="pygridmet.get_bygeom",
             )
-            # Spatial aggregation
+            # Spatial aggregation. get_bygeom returns an xarray.Dataset, so
+            # reduce over the spatial dims (dim=[...]) rather than axis=1.
             if aggregation == "basin_mean":
-                df = df.mean(axis=1).to_frame(name=var_key)
+                df = _basin_aggregate_to_frame(df, var_key, how="mean")
             elif aggregation == "basin_sum":
-                df = df.sum(axis=1).to_frame(name=var_key)
+                df = _basin_aggregate_to_frame(df, var_key, how="sum")
 
         # Normalise to (date, variable) shape
         if isinstance(df.index, pd.DatetimeIndex):
@@ -249,10 +328,11 @@ class Backend(SourceBackend):
                 ),
                 label="pydaymet.get_bygeom",
             )
-            if aggregation in ("basin_mean",):
-                df = df.mean(axis=1).to_frame(name=var_key)
+            # get_bygeom returns an xarray.Dataset → reduce over spatial dims.
+            if aggregation == "basin_mean":
+                df = _basin_aggregate_to_frame(df, var_key, how="mean")
             elif aggregation == "basin_sum":
-                df = df.sum(axis=1).to_frame(name=var_key)
+                df = _basin_aggregate_to_frame(df, var_key, how="sum")
 
         if isinstance(df.index, pd.DatetimeIndex):
             df = df.reset_index().rename(columns={"index": "date", "time": "date"})
@@ -291,17 +371,24 @@ class Backend(SourceBackend):
         product = cfg.get("pygeohydro_product", "")
 
         if product == "nlcd":
-            year = cfg.get("default_year", 2019)
+            # Honour the caller's requested year via the start date, snapping to
+            # the nearest available NLCD epoch; fall back to the configured
+            # default if the date can't be parsed.
+            year = _nearest_nlcd_year(start, default=cfg.get("default_year", 2019))
             gdf = gpd.GeoDataFrame(geometry=[geometry], crs="EPSG:4326")
             ds = gh.nlcd_bygeom(gdf, years={"cover": [year]}, resolution=cfg.get("resolution_m", 30))
+            # nlcd_bygeom keyed by GeoDataFrame index → unwrap to a single Dataset.
+            if isinstance(ds, dict):
+                ds = next(iter(ds.values()))
             return ds
 
         if product == "polaris":
-            layers = cfg.get("default_layers", ["sand", "silt", "clay", "ksat"])
-            depth = cfg.get("default_depth", "0_5")
-            gdf = gpd.GeoDataFrame(geometry=[geometry], crs="EPSG:4326")
-            ds = gh.soil_properties(layers, depths=[depth], geometry=gdf.geometry.iloc[0])
-            return ds
+            # POLARIS layers are named "<property>_<depth-index>" (0–5 cm → "_5").
+            # Use the proven pygeohydro.soil_polaris API which returns an
+            # xr.Dataset with vars like sand_5/silt_5/clay_5/ksat_5 — exactly
+            # what the Curve-Number classifier expects.
+            layers = cfg.get("default_layers", ["sand_5", "silt_5", "clay_5", "ksat_5"])
+            return gh.soil_polaris(layers=layers, geometry=geometry, geo_crs=4326)
 
         raise NotImplementedError(
             f"pygeohydro product {product!r} not yet implemented in HyRiver backend."

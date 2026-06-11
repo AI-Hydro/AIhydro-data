@@ -9,9 +9,11 @@ dist/
 build/
 *.egg
 
-# Cache & data
-cache/
+# Cache & data (root-level only — aihydro_data/cache/ is a source module!)
+/cache/
 .cache/
+.import_linter_cache/
+tests/benchmarks/basins.json
 *.tif
 *.tiff
 *.nc
@@ -46,3 +48,4 @@ Thumbs.db
 .env
 *.pem
 *.key
+examples/cache/

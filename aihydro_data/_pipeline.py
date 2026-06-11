@@ -12,7 +12,7 @@ Pipeline (Phase 2+):
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from aihydro_data.contracts import (
     AggregationMode,
@@ -21,6 +21,79 @@ from aihydro_data.contracts import (
 )
 
 log = logging.getLogger(__name__)
+
+# ── Variable alias table ──────────────────────────────────────────────────────
+# Maps common natural-language names → canonical variable IDs used in policy.py.
+# Applied at the very top of fetch() so aliases work for both single and batch
+# calls, and for product-pin (manual mode) too.
+#
+# Motivation: LLMs (and humans) naturally write "temperature", "discharge",
+# "elevation", etc. — all of which resolve to tmax/tmin/tmean, streamflow, dem.
+# Without these aliases, the router raises REGION_NO_POLICY on perfectly
+# reasonable requests. Adding aliases here is zero-cost (one dict lookup)
+# and prevents unhelpful "no policy for variable='temperature'" errors.
+_VARIABLE_ALIASES: dict[str, str] = {
+    # Temperature
+    "temperature":          "tmean",
+    "temp":                 "tmean",
+    "mean_temperature":     "tmean",
+    "avg_temperature":      "tmean",
+    "average_temperature":  "tmean",
+    "max_temperature":      "tmax",
+    "maximum_temperature":  "tmax",
+    "min_temperature":      "tmin",
+    "minimum_temperature":  "tmin",
+    # Precipitation
+    "precip":               "precipitation",
+    "rainfall":             "precipitation",
+    "rain":                 "precipitation",
+    "total_precipitation":  "precipitation",
+    # Streamflow / discharge
+    "discharge":            "streamflow",
+    "flow":                 "streamflow",
+    "river_discharge":      "streamflow",
+    "runoff":               "streamflow",
+    # Evapotranspiration
+    "evapotranspiration":   "et",
+    "evaporation":          "et",
+    "actual_et":            "et",
+    "aet":                  "et",
+    "reference_et":         "pet",
+    "potential_et":         "pet",
+    "potential_evapotranspiration": "pet",
+    # Elevation / DEM
+    "elevation":            "dem",
+    "altitude":             "dem",
+    "topography":           "dem",
+    # Land cover
+    "land_cover":           "landcover",
+    "land_use":             "landcover",
+    "lulc":                 "landcover",
+    # NDVI / vegetation
+    "vegetation":           "ndvi",
+    "greenness":            "ndvi",
+    # Soil moisture
+    "moisture":             "soil_moisture",
+    "sm":                   "soil_moisture",
+    # Optical imagery
+    "imagery":              "optical",
+    "satellite":            "optical",
+    "remote_sensing":       "optical",
+}
+
+
+def _normalise_variable(variable: str) -> str:
+    """Canonicalise a variable name, applying the alias table case-insensitively.
+
+    Returns the canonical name (lower-case), logging a DEBUG note when an alias
+    fires so engineers can trace variable substitution without it being noisy.
+    """
+    canon = variable.strip().lower().replace("-", "_").replace(" ", "_")
+    alias = _VARIABLE_ALIASES.get(canon)
+    if alias and alias != canon:
+        log.debug("Variable alias applied: %r → %r", variable, alias)
+        return alias
+    return canon
 
 
 def _looks_like_collection(geom: Any) -> bool:
@@ -75,6 +148,7 @@ def fetch(
     cache: bool = True,
     index: Optional[str] = None,
     native_resolution: bool = False,
+    validate: Optional[Callable[[FetchResult], bool]] = None,
 ) -> FetchResult:
     """
     Fetch one variable for one geometry/time window.
@@ -88,6 +162,19 @@ def fetch(
         Pin a specific product. Fallback chain still applies if you pass
         `fallback=[...]`; pass `fallback=None` (default) to use the policy
         default, or `fallback=[]` to disable fallbacks entirely.
+
+    Quality-gated fallback (`validate=`):
+        Pass a callback `validate(result) -> bool`. After each candidate
+        succeeds, the callback inspects the FetchResult; returning False (or
+        raising) *rejects* that result and forces the router to try the next
+        product in the chain — mirroring delineation/router.py's escalation
+        logic. The rejection is recorded in `result.fallback_history`.
+
+    Decision trail:
+        Every returned FetchResult carries `.fallback_history`: an ordered list
+        of `{product, source, outcome, reason}` describing each candidate the
+        router considered (`failed`/`rejected`/`served`), so the chosen backend
+        is always explainable.
 
     Batch dispatch:
         If `geometry` is a list/tuple/dict/GeoDataFrame of MULTIPLE entries,
@@ -107,7 +194,15 @@ def fetch(
         - aihydro_data.list_products() to discover what's available
         - aihydro_data.get_product(id) for one product's full spec
         - the bundled help_topics/first_fetch.md for an end-to-end walk-through
+
+    Common aliases accepted (silently normalised):
+        temperature / temp → tmean  |  precip / rain → precipitation
+        discharge / flow   → streamflow  |  elevation / altitude → dem
+        land_cover / lulc  → landcover   |  evapotranspiration   → et
     """
+    # ── -1. Normalise variable name (alias table + lower/strip) ──────────
+    variable = _normalise_variable(variable)
+
     # ── 0. Auto-dispatch lists / dicts / GeoDataFrames to fetch_batch ─────
     # User-friendliness: `fetch("streamflow", ["gauge1", "gauge2"], ...)` is
     # the natural shape. Detect collection-style inputs and forward to the
@@ -162,13 +257,27 @@ def fetch(
         candidate_ids = resolve_product_ids(variable, region)
         if not candidate_ids:
             from aihydro_data.exceptions import RegionUnsupported
+            from aihydro_data.routing.policy import PRODUCT_POLICY
+            # Collect all canonical variable names that have at least one policy row.
+            known_variables = sorted({v for v, _r in PRODUCT_POLICY})
+            # Surface any alias reverse-mapping to help the caller pick the right name.
+            _rev = {v: k for k, v in _VARIABLE_ALIASES.items() if k != v}
+            alias_hint = (
+                f" (Did you mean {_rev.get(variable)!r}?)"
+                if variable in _rev else ""
+            )
             raise RegionUnsupported(
                 code="REGION_NO_POLICY",
                 message=(
-                    f"No routing policy for variable={variable!r}, region={region!r}. "
-                    f"Call list_products(variable={variable!r}) to see what's available."
+                    f"No routing policy for variable={variable!r}, region={region!r}.{alias_hint} "
+                    f"Valid variable names: {known_variables}. "
+                    f"Call data_list_products() with no args to see all available products."
                 ),
-                recovery="Try mode='manual' with a specific product id, or choose a supported variable.",
+                recovery=(
+                    f"Use one of the supported variables: {known_variables}. "
+                    "Common aliases are accepted — e.g. 'temperature'→'tmean', "
+                    "'discharge'→'streamflow', 'elevation'→'dem', 'precip'→'precipitation'."
+                ),
                 next_tools=["data_list_products"],
                 docs_anchor="routing",
             )
@@ -219,13 +328,41 @@ def fetch(
 
     # ── 5. Fetch with fallback chain ──────────────────────────────────────
     last_exc: Exception | None = None
+    history: list[dict[str, str]] = []
     for spec in candidate_specs:
         try:
             result = _fetch_one(
                 spec, geom, start, end, aggregation, req,
                 index=index, native_resolution=native_resolution,
             )
-            result = result.model_copy(update={"cache_key": ck})
+            # Quality gate: let the caller reject a low-quality result and
+            # force the next fallback (delineation-style escalation).
+            if validate is not None:
+                try:
+                    accepted = validate(result)
+                except Exception as ve:
+                    accepted = False
+                    log.warning(
+                        "validate() raised for %r (%s); rejecting and trying next.",
+                        spec.id, ve,
+                    )
+                    reason = f"validate() raised: {ve}"
+                else:
+                    reason = "" if accepted else "rejected by validate()"
+                if not accepted:
+                    history.append({
+                        "product": spec.id, "source": spec.source,
+                        "outcome": "rejected", "reason": reason,
+                    })
+                    continue
+
+            history.append({
+                "product": spec.id, "source": spec.source,
+                "outcome": "served", "reason": "",
+            })
+            result = result.model_copy(update={
+                "cache_key": ck, "fallback_history": history,
+            })
             # Write to disk cache (best-effort, never raises). Manifest
             # records WHICH product actually served the data, so the
             # provenance trail stays intact even though the key is
@@ -241,6 +378,10 @@ def fetch(
                 "Product %r failed (%s: %s); trying next in chain.",
                 spec.id, type(exc).__name__, exc,
             )
+            history.append({
+                "product": spec.id, "source": spec.source,
+                "outcome": "failed", "reason": f"{type(exc).__name__}: {exc}",
+            })
             last_exc = exc
             continue
 
@@ -252,6 +393,7 @@ def fetch(
             f"{[s.id for s in candidate_specs]}. "
             f"Last error: {last_exc}"
         ),
+        details={"fallback_history": history},
         recovery=(
             "Check backend availability with `aihydro-data doctor`. "
             "For GEE products, ensure GEE is authenticated (`aihydro-data auth gee`)."
