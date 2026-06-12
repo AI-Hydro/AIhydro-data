@@ -15,7 +15,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aihydro-data"
-version = "0.1.7"
+version = "0.2.0"
 description = "Global hydrology dataverse — multi-source, region-aware data fetch (GEE + STAC + HyRiver) for AI agents and humans"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -46,7 +46,7 @@ dependencies = [
     # Shared robustness substrate — supplies the single hashing/provenance
     # vocabulary (content_hash/param_hash) so cache keys never drift between
     # layers. Zero heavy deps (pure stdlib), so this stays light.
-    "aihydro-core",
+    "aihydro-core>=0.1.0,<0.2",
     "numpy>=1.24.0",
     "pandas>=2.0.0",
     "pydantic>=2.0.0",
