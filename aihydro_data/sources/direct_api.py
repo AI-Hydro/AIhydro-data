@@ -19,6 +19,7 @@ import logging
 from typing import Any, Optional
 
 from aihydro_data.contracts import AggregationMode, ProductSpec
+from aihydro_data.sources._common import require_import
 from aihydro_data.sources.base import SourceBackend
 
 log = logging.getLogger(__name__)
@@ -263,34 +264,8 @@ class Backend(SourceBackend):
         from aihydro_data.exceptions import SourceUnavailable, DateOutOfRange
 
         # ── Runtime dependency checks (lazy) ──────────────────────────────
-        try:
-            import xarray as xr  # noqa: F401
-        except ImportError:
-            raise SourceUnavailable(
-                code="XARRAY_NOT_INSTALLED",
-                message=(
-                    "xarray is required for CHIRPS_IRI. "
-                    "Run `pip install aihydro-data[opendap]`."
-                ),
-                recovery="pip install aihydro-data[opendap]",
-                next_tools=["data_doctor"],
-                docs_anchor="install#opendap",
-            )
-
-        try:
-            import netCDF4  # noqa: F401
-        except ImportError:
-            raise SourceUnavailable(
-                code="NETCDF4_NOT_INSTALLED",
-                message=(
-                    "netCDF4 is required for CHIRPS_IRI OPeNDAP access. "
-                    "Run `pip install aihydro-data[opendap]`. "
-                    "On conda: `conda install netCDF4`."
-                ),
-                recovery="pip install aihydro-data[opendap]",
-                next_tools=["data_doctor"],
-                docs_anchor="install#opendap",
-            )
+        xr = require_import("xarray", extra="opendap", backend="chirps_iri")
+        require_import("netCDF4", extra="opendap", backend="chirps_iri")
 
         import numpy as np
         import pandas as pd
@@ -455,19 +430,7 @@ class Backend(SourceBackend):
         """
         from aihydro_data.exceptions import SourceUnavailable, DateOutOfRange
 
-        try:
-            import requests
-        except ImportError:
-            raise SourceUnavailable(
-                code="REQUESTS_NOT_INSTALLED",
-                message=(
-                    "The `requests` library is required for Open-Meteo. "
-                    "Install it with: pip install requests"
-                ),
-                recovery="pip install requests",
-                next_tools=["data_doctor"],
-                docs_anchor="install",
-            )
+        import requests
 
         import pandas as pd
         from datetime import datetime
@@ -581,14 +544,3 @@ class Backend(SourceBackend):
         )
         return df
 
-    def _assert_available(self) -> None:
-        ok, reason = self.is_available()
-        if not ok:
-            from aihydro_data.exceptions import SourceUnavailable
-            raise SourceUnavailable(
-                code="DIRECT_API_NOT_INSTALLED",
-                message=reason or "direct_api backend is not available.",
-                recovery="pip install aihydro-data[hyriver]",
-                next_tools=["data_doctor"],
-                docs_anchor="install",
-            )

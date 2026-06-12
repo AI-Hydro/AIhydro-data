@@ -190,14 +190,10 @@ class Backend(SourceBackend):
 
     @staticmethod
     def _geodesic_area_km2(polygon: Any) -> Optional[float]:
-        try:
-            from pyproj import Geod
-            geod = Geod(ellps="WGS84")
-            area_m2, _ = geod.geometry_area_perimeter(polygon)
-            return abs(area_m2) / 1e6
-        except Exception as exc:
-            log.debug("geodesic area failed: %s", exc)
-            return None
+        # Shared implementation (geometry/measures.py) — kept as a thin method so
+        # the snap code reads the same as the other backends.
+        from aihydro_data.geometry.measures import geodesic_area_km2
+        return geodesic_area_km2(polygon)
 
     # ── EWDS retrieval ───────────────────────────────────────────────────────
 

@@ -59,6 +59,15 @@ class SourceBackend(ABC):
         """Raster fetch — return the clipped grid (no temporal aggregation)."""
 
 
+    def _assert_available(self, spec: Optional[ProductSpec] = None) -> None:
+        """Raise SourceUnavailable if this backend (or the product's dep) is not usable.
+
+        Backends with special credential handling (e.g. cds_glofas) override this.
+        """
+        from aihydro_data.sources._common import assert_backend_available
+        assert_backend_available(self, spec)
+
+
 _BACKEND_INSTANCES: dict[str, SourceBackend] = {}
 
 

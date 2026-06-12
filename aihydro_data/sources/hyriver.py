@@ -13,6 +13,7 @@ import logging
 from typing import Any, Optional
 
 from aihydro_data.contracts import AggregationMode, ProductSpec
+from aihydro_data.sources._common import require_import
 from aihydro_data.sources.base import SourceBackend
 
 log = logging.getLogger(__name__)
@@ -227,17 +228,7 @@ class Backend(SourceBackend):
         end: str,
         aggregation: AggregationMode,
     ) -> Any:
-        try:
-            import pygridmet
-        except ImportError as exc:
-            from aihydro_data.exceptions import SourceUnavailable
-            raise SourceUnavailable(
-                code="HYRIVER_GRIDMET_NOT_INSTALLED",
-                message=f"pygridmet not installed: {exc}",
-                recovery="pip install aihydro-data[hyriver]",
-                next_tools=["data_doctor"],
-                docs_anchor="install",
-            ) from exc
+        pygridmet = require_import("pygridmet", extra="hyriver", backend="hyriver")
 
         import pandas as pd
         from aihydro_data.sources._retry import call_with_retry
@@ -294,15 +285,7 @@ class Backend(SourceBackend):
         start: str,
         end: str,
     ) -> Any:
-        try:
-            import pygridmet
-        except ImportError as exc:
-            from aihydro_data.exceptions import SourceUnavailable
-            raise SourceUnavailable(
-                code="HYRIVER_GRIDMET_NOT_INSTALLED",
-                message=f"pygridmet not installed: {exc}",
-                recovery="pip install aihydro-data[hyriver]",
-            ) from exc
+        pygridmet = require_import("pygridmet", extra="hyriver", backend="hyriver")
 
         import geopandas as gpd
         var_key = cfg["pygridmet_variable"]
@@ -321,17 +304,7 @@ class Backend(SourceBackend):
         end: str,
         aggregation: AggregationMode,
     ) -> Any:
-        try:
-            import pydaymet
-        except ImportError as exc:
-            from aihydro_data.exceptions import SourceUnavailable
-            raise SourceUnavailable(
-                code="HYRIVER_DAYMET_NOT_INSTALLED",
-                message=f"pydaymet not installed: {exc}",
-                recovery="pip install aihydro-data[hyriver]",
-                next_tools=["data_doctor"],
-                docs_anchor="install",
-            ) from exc
+        pydaymet = require_import("pydaymet", extra="hyriver", backend="hyriver")
 
         import pandas as pd
         from aihydro_data.sources._retry import call_with_retry
@@ -380,17 +353,7 @@ class Backend(SourceBackend):
         end: str,
     ) -> Any:
         """Fetch NLCD or POLARIS via pygeohydro. Returns xarray.Dataset."""
-        try:
-            import pygeohydro as gh
-        except ImportError as exc:
-            from aihydro_data.exceptions import SourceUnavailable
-            raise SourceUnavailable(
-                code="HYRIVER_PYGEOHYDRO_NOT_INSTALLED",
-                message=f"pygeohydro not installed: {exc}",
-                recovery="pip install aihydro-data[hyriver]",
-                next_tools=["data_doctor"],
-                docs_anchor="install",
-            ) from exc
+        gh = require_import("pygeohydro", extra="hyriver", backend="hyriver")
 
         import geopandas as gpd
         product = cfg.get("pygeohydro_product", "")
@@ -428,17 +391,7 @@ class Backend(SourceBackend):
         geometry: Any,
     ) -> Any:
         """Fetch USGS 3DEP DEM via py3dep. Returns xarray.DataArray."""
-        try:
-            import py3dep
-        except ImportError as exc:
-            from aihydro_data.exceptions import SourceUnavailable
-            raise SourceUnavailable(
-                code="HYRIVER_PY3DEP_NOT_INSTALLED",
-                message=f"py3dep not installed: {exc}",
-                recovery="pip install aihydro-data[hyriver]",
-                next_tools=["data_doctor"],
-                docs_anchor="install",
-            ) from exc
+        py3dep = require_import("py3dep", extra="hyriver", backend="hyriver")
 
         resolution = cfg.get("py3dep_resolution", 10)
         product = cfg.get("py3dep_product", "DEM")

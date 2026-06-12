@@ -25,6 +25,7 @@ clear AuthRequired-style message at call-time instead.
 """
 from __future__ import annotations
 
+import functools
 import logging
 from typing import Any
 
@@ -32,6 +33,35 @@ log = logging.getLogger(__name__)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+def _tool_envelope(fn: Any) -> Any:
+    """Decorator: catch AihydroDataError → .to_dict() and bare Exception → _err().
+
+    Applied to every _data_* tool so each one only needs to contain the happy
+    path — no repeated try/except boilerplate.
+    """
+    @functools.wraps(fn)
+    def _wrapped(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            try:
+                from aihydro_data.exceptions import AihydroDataError
+                if isinstance(exc, AihydroDataError):
+                    return exc.to_dict()
+            except Exception:
+                pass
+            return _err(
+                "UNEXPECTED_ERROR",
+                f"Unexpected error in {fn.__name__}: {exc}",
+                recovery=(
+                    "Check arguments and try again. "
+                    "Call data_help() for usage examples, or data_doctor() for environment issues."
+                ),
+                next_tools=["data_list_products", "data_validate_request", "data_doctor"],
+            )
+    return _wrapped
+
 
 def _err(code: str, message: str, recovery: str = "", next_tools: list[str] | None = None,
          docs_anchor: str = "", **details: Any) -> dict[str, Any]:
@@ -143,6 +173,7 @@ def _would_route_to_queued_source(variable: str, geometry: Any, product: str | N
     return False, ""
 
 
+@_tool_envelope
 def _data_fetch(
     variable: str,
     geometry: Any,
@@ -186,12 +217,8 @@ def _data_fetch(
         Use data_fetch_background() + get_data_fetch_result() for those variables.
     """
     from aihydro_data._pipeline import fetch
-    from aihydro_data.exceptions import AihydroDataError
 
     # ── Pre-flight: redirect queued backends before they block ────────────────
-    # Check if the route resolves to a backend that queues on remote HPC
-    # (e.g. GloFAS on EWDS). If so, return immediately with a redirect message
-    # instead of blocking the entire agent loop for minutes.
     is_queued, queued_source = _would_route_to_queued_source(variable, geometry, product)
     if is_queued:
         return {
@@ -219,31 +246,22 @@ def _data_fetch(
             "next_tools": ["data_fetch_background", "get_data_fetch_result"],
         }
 
-    try:
-        result = fetch(
-            variable=variable,
-            geometry=geometry,
-            start=start,
-            end=end,
-            mode=mode,  # type: ignore[arg-type]
-            product=product,
-            aggregation=aggregation,  # type: ignore[arg-type]
-            cache=cache,
-            region=region,
-            outlet=tuple(outlet) if outlet else None,
-        )
-        return _result_to_dict(result)
-    except AihydroDataError as exc:
-        return exc.to_dict()
-    except Exception as exc:
-        return _err(
-            "UNEXPECTED_ERROR",
-            f"Unexpected error during fetch: {exc}",
-            recovery="Check variable name and geometry format. Call data_list_products() for valid variables.",
-            next_tools=["data_list_products", "data_validate_request"],
-        )
+    result = fetch(
+        variable=variable,
+        geometry=geometry,
+        start=start,
+        end=end,
+        mode=mode,  # type: ignore[arg-type]
+        product=product,
+        aggregation=aggregation,  # type: ignore[arg-type]
+        cache=cache,
+        region=region,
+        outlet=tuple(outlet) if outlet else None,
+    )
+    return _result_to_dict(result)
 
 
+@_tool_envelope
 def _data_batch_fetch(
     variable: str,
     geometries: list[Any],
@@ -282,7 +300,6 @@ def _data_batch_fetch(
         }
     """
     from aihydro_data._pipeline import fetch_batch
-    from aihydro_data.exceptions import AihydroDataError
 
     # Build input: list of (label, geom) pairs or plain list
     if labels:
@@ -290,26 +307,17 @@ def _data_batch_fetch(
     else:
         geom_input = geometries
 
-    try:
-        raw = fetch_batch(
-            variable=variable,
-            geometries=geom_input,
-            start=start,
-            end=end,
-            mode=mode,  # type: ignore[arg-type]
-            product=product,
-            aggregation=aggregation,  # type: ignore[arg-type]
-            max_workers=max_workers,
-            on_error=on_error,  # type: ignore[arg-type]
-        )
-    except AihydroDataError as exc:
-        return exc.to_dict()
-    except Exception as exc:
-        return _err(
-            "UNEXPECTED_ERROR",
-            f"Batch fetch failed: {exc}",
-            next_tools=["data_fetch", "data_list_products"],
-        )
+    raw = fetch_batch(
+        variable=variable,
+        geometries=geom_input,
+        start=start,
+        end=end,
+        mode=mode,  # type: ignore[arg-type]
+        product=product,
+        aggregation=aggregation,  # type: ignore[arg-type]
+        max_workers=max_workers,
+        on_error=on_error,  # type: ignore[arg-type]
+    )
 
     results_out = {lbl: _result_to_dict(r) for lbl, r in raw["results"].items()}
     errors_out = {
@@ -330,6 +338,7 @@ def _data_batch_fetch(
     }
 
 
+@_tool_envelope
 def _data_list_products(
     variable: str | None = None,
     region: str | None = None,
@@ -373,6 +382,7 @@ def _data_list_products(
     return out
 
 
+@_tool_envelope
 def _data_describe_product(product_id: str) -> dict[str, Any]:
     """
     Return the full ProductSpec for a single product, including citation,
@@ -401,6 +411,7 @@ def _data_describe_product(product_id: str) -> dict[str, Any]:
     return spec.model_dump()
 
 
+@_tool_envelope
 def _data_validate_request(
     variable: str,
     geometry: Any,
@@ -531,6 +542,7 @@ def _data_validate_request(
     }
 
 
+@_tool_envelope
 def _data_get_cache_status() -> dict[str, Any]:
     """
     Return a summary of the disk cache at ~/.aihydro/cache/data/.
@@ -551,6 +563,7 @@ def _data_get_cache_status() -> dict[str, Any]:
     return cache_status()
 
 
+@_tool_envelope
 def _data_invalidate_cache(cache_key: str) -> dict[str, Any]:
     """
     Remove a specific entry from the disk cache.
@@ -570,6 +583,7 @@ def _data_invalidate_cache(cache_key: str) -> dict[str, Any]:
     return {"deleted": deleted, "cache_key": cache_key}
 
 
+@_tool_envelope
 def _data_doctor() -> dict[str, Any]:
     """
     Environment health check — probes each backend, auth state, cache size,
@@ -669,6 +683,7 @@ def _data_doctor() -> dict[str, Any]:
     }
 
 
+@_tool_envelope
 def _data_help(topic: str | None = None) -> str | dict[str, Any]:
     """
     Guided onboarding and topic reference for aihydro-data.

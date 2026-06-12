@@ -107,9 +107,9 @@ class Backend(SourceBackend):
         import pandas as pd
         import geoglows
 
-        outlet_lat, outlet_lon, target_area_km2 = self._outlet_and_area(geometry)
+        from aihydro_data.geometry.measures import outlet_and_area
+        outlet_lat, outlet_lon, target_area_km2 = outlet_and_area(geometry, outlet)
         if outlet is not None:
-            outlet_lat, outlet_lon = float(outlet[0]), float(outlet[1])
             log.info("GEOGLOWS: using caller-supplied outlet (%.4f, %.4f) for snap.",
                      outlet_lat, outlet_lon)
 
@@ -195,28 +195,8 @@ class Backend(SourceBackend):
             "Use aggregation='basin_mean' (default)."
         )
 
-    # ── Geometry → outlet point + basin area ─────────────────────────────────
-
-    def _outlet_and_area(self, geometry: Any):
-        """Return (lat, lon, area_km2|None). Polygon → centroid + geodesic area."""
-        if getattr(geometry, "geom_type", None) in ("Polygon", "MultiPolygon"):
-            c = geometry.centroid
-            return float(c.y), float(c.x), self._geodesic_area_km2(geometry)
-        try:
-            return float(geometry.y), float(geometry.x), None
-        except Exception:
-            c = geometry.centroid
-            return float(c.y), float(c.x), None
-
-    @staticmethod
-    def _geodesic_area_km2(polygon: Any) -> Optional[float]:
-        try:
-            from pyproj import Geod
-            area_m2, _ = Geod(ellps="WGS84").geometry_area_perimeter(polygon)
-            return abs(area_m2) / 1e6
-        except Exception as exc:
-            log.debug("geodesic area failed: %s", exc)
-            return None
+    # Geometry → outlet point + basin area: see geometry/measures.py
+    # (outlet_and_area / geodesic_area_km2), shared with the other snap backends.
 
     # ── Snapping ─────────────────────────────────────────────────────────────
 
@@ -251,13 +231,18 @@ class Backend(SourceBackend):
         """REST: nearest GEOGLOWS reach id for a coordinate."""
         import requests
         from aihydro_data.exceptions import SourceUnavailable
-        try:
+        from aihydro_data.sources._retry import call_with_retry
+
+        def _call():
             r = requests.get(
                 f"{_REST_ENDPOINT}/getriverid",
                 params={"lat": lat, "lon": lon}, timeout=30,
             )
             r.raise_for_status()
             return int(r.json()["river_id"])
+
+        try:
+            return call_with_retry(_call, label="geoglows.getriverid")
         except Exception as exc:
             raise SourceUnavailable(
                 code="GEOGLOWS_RIVERID_FAILED",
@@ -317,19 +302,6 @@ class Backend(SourceBackend):
             log.warning("GEOGLOWS metadata load failed (%s) — snap will use "
                         "nearest reach only, no area validation.", exc)
             return None
-
-    def _assert_available(self) -> None:
-        ok, reason = self.is_available()
-        if not ok:
-            from aihydro_data.exceptions import SourceUnavailable
-            raise SourceUnavailable(
-                code="GEOGLOWS_UNAVAILABLE",
-                message=reason or "GEOGLOWS backend is not available.",
-                recovery="pip install aihydro-data[geoglows]",
-                next_tools=["data_doctor"],
-                docs_anchor="products#geoglows",
-            )
-
 
 def _cache_root() -> str:
     """Reuse aihydro-data's cache root so GEOGLOWS artifacts live with the rest."""

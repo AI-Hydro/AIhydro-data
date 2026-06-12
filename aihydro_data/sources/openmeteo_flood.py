@@ -90,24 +90,26 @@ class Backend(SourceBackend):
         import pandas as pd
         import requests
         from aihydro_data.exceptions import SourceUnavailable, DateOutOfRange
+        from aihydro_data.sources._retry import call_with_retry
 
-        if outlet is not None:
-            lat, lon = float(outlet[0]), float(outlet[1])
-        else:
-            lat, lon = self._outlet(geometry)
-        area_km2 = self._polygon_area_km2(geometry)   # None for bare-point inputs
+        from aihydro_data.geometry.measures import outlet_and_area
+        lat, lon, area_km2 = outlet_and_area(geometry, outlet)  # area None for points
         cfg = spec.backend_config
 
+        params = {
+            "latitude": lat,
+            "longitude": lon,
+            "daily": "river_discharge",
+            "start_date": start,
+            "end_date": end,
+            "cell_selection": cfg.get("cell_selection", "nearest"),
+            "ensemble": False,
+        }
         try:
-            r = requests.get(_FLOOD_ENDPOINT, params={
-                "latitude": lat,
-                "longitude": lon,
-                "daily": "river_discharge",
-                "start_date": start,
-                "end_date": end,
-                "cell_selection": cfg.get("cell_selection", "nearest"),
-                "ensemble": False,
-            }, timeout=60)
+            r = call_with_retry(
+                lambda: requests.get(_FLOOD_ENDPOINT, params=params, timeout=60),
+                label="openmeteo_flood.get",
+            )
         except Exception as exc:
             raise SourceUnavailable(
                 code="OPENMETEO_REQUEST_FAILED",
@@ -195,29 +197,5 @@ class Backend(SourceBackend):
             "Open-Meteo Flood serves point/cell discharge time series only, not rasters."
         )
 
-    # ── Helpers ──────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _polygon_area_km2(geometry: Any) -> Optional[float]:
-        """Return geodesic area in km² for polygon inputs; None for points."""
-        if getattr(geometry, "geom_type", None) not in ("Polygon", "MultiPolygon"):
-            return None
-        try:
-            from pyproj import Geod
-            area_m2, _ = Geod(ellps="WGS84").geometry_area_perimeter(geometry)
-            return abs(area_m2) / 1e6
-        except Exception as exc:
-            log.debug("Open-Meteo: polygon area calculation failed: %s", exc)
-            return None
-
-    @staticmethod
-    def _outlet(geometry: Any):
-        """Return (lat, lon) — polygon → centroid, point → coords."""
-        if getattr(geometry, "geom_type", None) in ("Polygon", "MultiPolygon"):
-            c = geometry.centroid
-            return float(c.y), float(c.x)
-        try:
-            return float(geometry.y), float(geometry.x)
-        except Exception:
-            c = geometry.centroid
-            return float(c.y), float(c.x)
+    # Geometry → outlet point + basin area: see geometry/measures.py
+    # (outlet_and_area), shared with the GEOGLOWS and GloFAS snap backends.
