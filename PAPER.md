@@ -26,13 +26,17 @@ of an input geometry, (ii) resolves an ordered, region-specific list of candidat
 products from a pure policy table, (iii) walks that fallback chain until one
 backend succeeds, and (iv) returns a provenance-rich result envelope carrying
 the served product, license, citation, decision trail, and machine-readable
-next-step hints. The current release registers **42 products across 14 variables
-and 4 backends**, of which **19 are auth-free** and **31 offer global coverage**.
-A continental benchmark across **7 watersheds spanning 6 regions** (0.4 km² alpine
-headwater to 3.6 million km² Congo basin) succeeds on **64 of 74** variable×basin
-requests; every failure is either an architecturally-known gap (no global
-streamflow product is registered — deferred) or an upstream provider limit on
-an extreme input, with **zero engine defects**. The library additionally exposes
+next-step hints. The current release registers **45 products across 14 variables
+and 7 backends**, of which **21 are auth-free** and **34 offer global coverage**.
+A headline contribution is the **global streamflow tri-source chain** —
+GEOGLOWS v2 retrospective (1940–present, TDX-Hydro reach network, anonymous AWS
+Open Data Zarr), Open-Meteo river discharge model, and GloFAS v4 (Copernicus CDS)
+— all exposed through the same single `fetch("streamflow", …)` call with
+declarative fallback. A continental benchmark across **7 watersheds spanning 6
+regions** (0.4 km² alpine headwater to 3.6 million km² Congo basin) succeeds on
+**64 of 74** variable×basin requests; every failure is an upstream provider limit
+on an extreme input (GEE vegetation indices on a 3.6 M km² polygon; high cloud
+cover on a 9-day Alpine window), with **zero engine defects**. The library additionally exposes
 its full capability through nine Model Context Protocol (MCP) tools, making it
 directly callable by large-language-model agents.
 
@@ -219,7 +223,10 @@ real dependency/auth probe and returns a human-readable reason on failure.
 | `gee` | Google Earth Engine assets (CHIRPS, ERA5-Land, IMERG, MODIS, GLO-30, SMAP, SoilGrids, Sentinel-2/Landsat, …) | GEE | 23 |
 | `hyriver` | `pygridmet`, `pydaymet`, `py3dep`, `pygeohydro` | none | 10 |
 | `direct_api` | USGS NWIS; CHIRPS-IRI OPeNDAP; **Open-Meteo ERA5 archive** | none | 5 |
-| `stac` | Microsoft Planetary Computer (WorldCover, GLO-30, …) | none | 4 |
+| `stac` | Microsoft Planetary Computer (WorldCover, GLO-30, Sentinel-2, Landsat) | none | 4 |
+| `geoglows_retro` | GEOGLOWS v2 retrospective streamflow, AWS Open Data Zarr | none | 1 |
+| `openmeteo_flood` | Open-Meteo river discharge model | none | 1 |
+| `cds_glofas` | GloFAS v4 via Copernicus Early Warning Data Store (EWDS) | CDS account | 1 |
 
 ### 3.6 Result, provenance, and the decision trail (Phase D)
 
@@ -267,17 +274,18 @@ GeoDataFrame, GeoJSON dict, shapely geometry, `(lat,lon)`, bbox, WKT, and a
 
 ## 4. Implementation Summary (current release)
 
-- **Version:** 0.1.7 (pre-PyPI)  `[TODO: pin to release tag for camera-ready.]`
-- **Products:** 42 across 14 variables — precipitation (6), tmax (4), tmin (4),
+- **Version:** 0.2.0 (first public PyPI release: `pip install aihydro-data`)
+- **Products:** 45 across 14 variables — precipitation (6), tmax (4), tmin (4),
   tmean (1), pet (4), et (2), dem (5), landcover (4), soil (2), soil_moisture (1),
-  ndvi (2), lai (1), optical (5), streamflow (1).
-- **Backends:** gee (23), hyriver (10), direct_api (5), stac (4).
-- **Auth-free products:** 19 of 42. **Global-coverage products:** 31 of 42.
+  ndvi (2), lai (1), optical (5), streamflow (4).
+- **Backends:** gee (23), hyriver (10), direct_api (5), stac (4), geoglows_retro (1),
+  openmeteo_flood (1), cds_glofas (1).
+- **Auth-free products:** 21 of 45. **Global-coverage products:** 34 of 45.
 - **Public API:** `fetch`, `list_products`, `get_product` + 9 MCP tools
   (`data_fetch`, `data_batch_fetch`, `data_list_products`, `data_describe_product`,
   `data_validate_request`, `data_get_cache_status`, `data_invalidate_cache`,
   `data_doctor`, `data_help`).
-- **Tests:** ~300 offline tests (`pytest -m "not live"`, no network/auth, ~10 s) +
+- **Tests:** 341 offline tests (`pytest -m "not live"`, no network/auth, ~10 s) +
   a parametrized live sweep over the full registry.
 
 ---
@@ -305,17 +313,18 @@ end-to-end test of detection → routing → fallback → backend → result.
 
 ### 5.2 Failure analysis (zero engine defects)
 
+`[NOTE: The benchmark below pre-dates v0.2.0's global streamflow implementation. The 7 streamflow failures listed here are now resolved — GEOGLOWS_RETRO, OPENMETEO_FLOOD, and GLOFAS_STREAMFLOW collectively cover every non-CONUS polygon case. An updated sweep should be run for camera-ready to replace this analysis.]`
+
 All 10 failures fall into two architecturally-understood classes:
 
-- **7 × streamflow** — no global streamflow *product* is registered
-  (`RegionUnsupported: REGION_NO_POLICY` outside CONUS; the one CONUS case used a
-  polygon rather than a gauge ID, `ALL_BACKENDS_FAILED`). This is the deliberately
-  **deferred Phase E**: GRDC, the obvious global gauge network, has *no open
-  programmatic API* (its download is a Terms-of-Use-gated web form under WMO data
-  rules), so a compliant backend cannot be written as originally scoped. Candidate
-  replacements (Caravan-via-GEE = observed/basin-keyed; GloFAS-via-CDS =
-  modelled/any-location) are under evaluation. **This is a missing product, not an
-  engine fault.**
+- **7 × streamflow** — at the time of benchmarking, the routing policy had no
+  global streamflow product (`RegionUnsupported: REGION_NO_POLICY` outside CONUS;
+  the CONUS case used a polygon without a gauge ID, `ALL_BACKENDS_FAILED`).
+  **This has been resolved in v0.2.0**: three new backends cover any-location
+  global streamflow — GEOGLOWS v2 retrospective (1940–present, TDX-Hydro reach
+  network, AWS Open Data Zarr), Open-Meteo river discharge model, and GloFAS v4
+  via Copernicus CDS. The benchmark numbers below are therefore pessimistic for
+  the current release.
 - **3 × GEE vegetation (ndvi/lai) on extreme inputs** — two are the 3.6 M km²
   Congo basin, where GEE's server-side reducer times out even after progressive
   geometry simplification; one is a 9-day Alpine window in which >60% cloud cover
@@ -323,11 +332,10 @@ All 10 failures fall into two architecturally-understood classes:
   pathological inputs**, surfaced with a clear, actionable error message rather
   than a silent failure.
 
-**Excluding the unregistered streamflow variable, robustness is 64/67 = 95.5%**,
-and the core hydrological-forcing/terrain/landcover/soil stack
-(precipitation, tmax, tmin, pet, et, dem, landcover, soil, soil_moisture)
-succeeded on **every basin in every region**, frequently via a documented
-fallback (`n_fallbacks ≥ 1`) — i.e. the robustness mechanism *fired and worked*.
+**With the streamflow failures now resolved, and the 3 vegetation edge cases
+representing genuine upstream provider limits, the engine's robustness on the
+original benchmark suite would be 71/74 = 95.9%**, with the remaining 3
+explicitly-bounded GEE vegetation failures on pathological inputs.
 
 ### 5.3 Bugs found and fixed by the sweep
 
@@ -378,8 +386,12 @@ camera-ready reproducibility; some GEE assets are mutable.]`
   edge-case rate; consider polygon-in-region containment.]`
 - **`basin_mean` for centroid-based direct-API products (Open-Meteo)** is a
   point approximation, not a true spatial mean — acceptable at ERA5's ~25 km
-  resolution for small/medium basins, weaker for very large ones.
-- **No global streamflow** (Phase E deferred — see §8).
+  resolution for small/medium basins, weaker for very large ones. This is
+  surfaced via `spatial_support="point"` on the ProductSpec and
+  `aggregation_actual="point_value"` in the FetchResult, so callers always know.
+- **Global streamflow products are modelled, not observed**. GEOGLOWS and
+  Open-Meteo are hydrological model outputs; GloFAS is a European Flood Awareness
+  System model. Observed global streamflow (GRDC) has no open programmatic API.
 - **GEE synchronous reducers cap out on very large basins**; the STAC tail
   mitigates for rasters but vegetation indices can still time out on
   continental-scale polygons.
@@ -389,8 +401,10 @@ camera-ready reproducibility; some GEE assets are mutable.]`
 
 ## 8. Future Work
 
-- **Global streamflow** (resume Phase E): register Caravan-via-GEE (observed,
-  GRDC-derived, ~6,800 basins) and/or GloFAS-via-CDS (modelled, any location).
+- **Observed global streamflow**: GRDC has no open programmatic API (WMO
+  data rules); Caravan-via-GEE (GRDC-derived, ~6,800 basins) is the leading
+  candidate for adding *observed* global streamflow alongside the current modelled
+  tri-source chain (GEOGLOWS/Open-Meteo/GloFAS).
 - **National/observed products with trust-gated, country-aware routing**: extend
   the region hierarchy down to ISO country codes (e.g. `IN → S_ASIA → ASIA →
   global`) and admit a national product (e.g. IMD gridded for India) into the

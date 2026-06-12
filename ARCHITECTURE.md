@@ -172,7 +172,15 @@ class SourceBackend(ABC):
 
 All imports inside backend files are **lazy** — the file is safe to import without any extras installed. `is_available()` does the actual import check and returns a human-readable reason on failure.
 
-### GEE backend (`sources/gee.py`)
+### GEE backend (`sources/gee/` package)
+
+Split across three files to keep each under ~600 lines while preserving the import path (`from aihydro_data.sources.gee import Backend`):
+
+- `__init__.py` — `Backend` class, `fetch_timeseries`, `fetch_raster`, `_fetch_soilgrids_raster`, `_assert_available`, `is_available`.
+- `_download.py` — `_DownloadMixin`: `_open_geotiff`, `_download_image_array`, `_clip_to_polygon`, `_download_tiled`, `_coarsen_scale_for_budget`.
+- `_composite.py` — `_CompositeMixin`: `fetch_multiband_composite`, `fetch_index_composite`, `_masked_median_composite`, `_extract_computed_ndvi`.
+
+Key flow:
 
 1. Calls `_gee_vendored/auth.py` to ensure EE is initialised.
 2. Converts geometry to GeoJSON for the EE API.
@@ -271,17 +279,61 @@ Agents read this field to chain downstream work without re-planning.
 
 ```
 tests/
-├── test_scaffold.py          smoke — package imports, contract validation
-├── test_routing.py           offline — region detection, policy resolution, registry
-├── test_phase4_products.py   offline — ET/DEM/SM/vegetation product specs
-├── test_live_backends.py     live   — targeted: GEE, HyRiver, NWIS, routing, cache
-└── test_live_sweep.py        live   — parametrized sweep: all 32 products
+├── test_scaffold.py              smoke — package imports, contract validation
+├── test_routing.py               offline — region detection, policy resolution, registry
+├── test_phase1_fixes.py          offline — B1/B2/B3/B5/B6/B7 bug-fix regression tests
+├── test_phase2_integrity.py      offline — spatial_support, empty-result gate
+├── test_phase3_routing_cache.py  offline — verify-on-read cache, region/outlet kwargs
+├── test_phase3_products.py       offline — NLDI, streamflow routing, product specs
+├── test_phase4_products.py       offline — ET/DEM/SM/vegetation/optical/streamflow specs
+├── test_phase_d_robustness.py    offline — require_import, retry, MCP envelope
+├── test_auto_batch.py            offline — batch kwargs, BatchResult, stop-flag
+├── test_cache_and_batch.py       offline — threaded manifest writes, batch concurrency
+├── test_open_meteo.py            offline — Open-Meteo temperature/PET/flood products
+├── test_optical_products.py      offline — Sentinel-2 / Landsat optical spec validation
+├── test_indices.py               offline — spectral index formulas
+├── test_stac.py                  offline — STAC product spec validation
+├── test_doc_consistency.py       offline — README/PAPER counts match live registry
+├── test_live_backends.py         live   — targeted: GEE, HyRiver, NWIS, routing, cache
+└── test_live_sweep.py            live   — parametrized sweep: all 45 products
 ```
 
-- **Offline** (`pytest -m "not live"`): ~7 seconds. No network, no auth. Covers registry correctness, routing logic, spec field shapes.
-- **Live** (`pytest tests/test_live_sweep.py`): ~13 minutes. Requires GEE auth + internet. Validates real backend responses, unit conversions, and plausibility checks.
+- **Offline** (`pytest -m "not live"`): ~10 seconds, 341 tests. No network, no auth. Covers registry correctness, routing logic, spec field shapes, and doc consistency.
+- **Live** (`pytest tests/test_live_sweep.py`): ~15 minutes. Requires GEE auth + internet. Validates real backend responses, unit conversions, and plausibility checks.
 
 The `conftest.py` auto-sets `AIHYDRO_DATA_NO_RETRY=1` for non-live runs, preventing retry delays from affecting the offline suite.
+
+---
+
+## Spatial-support model
+
+Every `ProductSpec` declares `spatial_support: Literal["areal", "point", "reach", "gauge_point"]` (default `"areal"`). This is the **invariant** of what the value represents, not how you asked for it:
+
+| `spatial_support` | Meaning | Example products |
+|---|---|---|
+| `areal` | True spatial average over the geometry | GEE, HyRiver, STAC products |
+| `point` | Centroid-based point value (Open-Meteo ERA5 archive) | `OPEN_METEO_TMAX`, `OPEN_METEO_PET` |
+| `reach` | Model-snapped river-reach value | `GEOGLOWS_RETRO`, `OPENMETEO_FLOOD`, `GLOFAS_STREAMFLOW` |
+| `gauge_point` | Observation at a specific gauge | `NWIS_STREAMFLOW` |
+
+The pipeline enforces honesty:
+- `aggregation="basin_sum"` on a non-areal product raises `AGGREGATION_UNSUPPORTED` immediately (a sum over a point value is physically meaningless).
+- `aggregation="basin_mean"` on a point/reach product is silently downgraded to `{support}_value` with an explicit note attached to the result (`FetchResult.notes`).
+- `FetchResult.spatial_support` and `FetchResult.aggregation_actual` surface the actual semantics so agents/users always know what the number means.
+
+## Verify-on-read cache
+
+Cache keys in auto mode exclude the product ID: the same (variable, geometry, start, end, aggregation) maps to the same key regardless of which product won. This is deliberate — the data are interchangeable for the same request.
+
+However, a cached result served by product `A` should **not** be returned if the current routing policy would never select `A` (e.g. the product was removed, its priority changed, or a better product became available). The verify-on-read check handles this:
+
+```python
+# cache_read is given the current candidate chain
+hit = cache_read(cache_key, request, allowed_products=["CHIRPS", "ERA5L_PRECIP"])
+# A cache hit from GRIDMET_PRECIP would be a MISS here — GRIDMET_PRECIP is not in this chain.
+```
+
+The manifest's `serving_product` is checked against `allowed_products` before returning the cached data. This closes the staleness hole without migrating cache keys or requiring a cache flush on policy changes.
 
 ---
 

@@ -32,7 +32,7 @@ result.next_steps        # agent-facing hints: what to do with this data
 - [Why](#why)
 - [Install](#install)
 - [Quick Start](#quick-start)
-- [Products (32 total)](#products)
+- [Products (45 total)](#products)
 - [Routing System](#routing-system)
 - [Auth Setup](#auth-setup)
 - [MCP Tools](#mcp-tools)
@@ -57,7 +57,7 @@ Before `aihydro-data`, fetching hydrology data meant hard-coding a single CONUS-
 | Land cover | NLCD | ESA WorldCover | Dynamic World |
 | Soil properties | POLARIS | SoilGrids | — |
 | DEM | 3DEP (10 m) | Copernicus GLO-30 | SRTM, MERIT-DEM |
-| Streamflow | USGS NWIS | — | — |
+| Streamflow | USGS NWIS | GEOGLOWS, Open-Meteo, GloFAS | GEOGLOWS, Open-Meteo |
 | NDVI | MODIS (250 m) | MODIS (250 m) | Sentinel-2 (10 m) |
 | LAI | MODIS | MODIS | — |
 
@@ -72,13 +72,13 @@ Before `aihydro-data`, fetching hydrology data meant hard-coding a single CONUS-
 pip install aihydro-data[all]
 
 # Per-backend
-pip install aihydro-data[gee]        # Google Earth Engine (20 products)
+pip install aihydro-data[gee]        # Google Earth Engine (23 products)
 pip install aihydro-data[hyriver]    # CONUS via HyRiver (10 products)
 pip install aihydro-data[stac]       # STAC catalogues (Planetary Computer)
 pip install aihydro-data[opendap]    # IRI OPeNDAP (CHIRPS auth-free fallback)
 ```
 
-> **Python**: 3.10+ &nbsp;|&nbsp; **GEE auth**: required for 20 GEE products (see [Auth Setup](#auth-setup))
+> **Python**: 3.10+ &nbsp;|&nbsp; **GEE auth**: required for 23 GEE products (see [Auth Setup](#auth-setup))
 
 ---
 
@@ -190,7 +190,7 @@ check = data_validate_request(
 
 ## Products
 
-32 products across 13 variables, live-tested against real backends (v0.2.0).
+45 products across 14 variables, live-tested against real backends (v0.2.0).
 
 ### Precipitation (6 products)
 
@@ -203,36 +203,40 @@ check = data_validate_request(
 | `DAYMET_PRECIP` | HyRiver | N. America | 1 km | Daily | High-res; no auth |
 | `CHIRPS_IRI` | Direct API | Global | 5 km | Daily | **Auth-free fallback** via IRI OPeNDAP |
 
-### Temperature (7 products)
+### Temperature (9 products)
 
-| ID | Source | Coverage | Resolution | Timestep |
-|---|---|---|---|---|
-| `ERA5L_TMAX` | GEE | Global | 11 km | Daily |
-| `ERA5L_TMIN` | GEE | Global | 11 km | Daily |
-| `ERA5L_TMEAN` | GEE | Global | 11 km | Daily |
-| `GRIDMET_TMAX` | HyRiver | CONUS | 4 km | Daily |
-| `GRIDMET_TMIN` | HyRiver | CONUS | 4 km | Daily |
-| `DAYMET_TMAX` | HyRiver | N. America | 1 km | Daily |
-| `DAYMET_TMIN` | HyRiver | N. America | 1 km | Daily |
-
-### Evapotranspiration (5 products)
-
-| ID | Variable | Source | Coverage | Resolution | Timestep |
+| ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `MOD16_ET` | ET (actual) | GEE | Global | 500 m | 8-day → monthly |
-| `TERRACLIMATE_AET` | ET (actual) | GEE | Global | 4.6 km | Monthly |
-| `MOD16_PET` | PET | GEE | Global | 500 m | 8-day → monthly |
-| `ERA5L_PET` | PET | GEE | Global | 11 km | Daily |
-| `GRIDMET_PET` | PET | HyRiver | CONUS | 4 km | Daily |
+| `ERA5L_TMAX` | GEE | Global | 11 km | Daily | GEE auth required |
+| `ERA5L_TMIN` | GEE | Global | 11 km | Daily | GEE auth required |
+| `ERA5L_TMEAN` | GEE | Global | 11 km | Daily | GEE auth required |
+| `GRIDMET_TMAX` | HyRiver | CONUS | 4 km | Daily | auth-free |
+| `GRIDMET_TMIN` | HyRiver | CONUS | 4 km | Daily | auth-free |
+| `DAYMET_TMAX` | HyRiver | N. America | 1 km | Daily | auth-free |
+| `DAYMET_TMIN` | HyRiver | N. America | 1 km | Daily | auth-free |
+| `OPEN_METEO_TMAX` | Direct API | Global | 25 km | Daily | **auth-free** centroid-based; Open-Meteo ERA5 archive |
+| `OPEN_METEO_TMIN` | Direct API | Global | 25 km | Daily | **auth-free** centroid-based; Open-Meteo ERA5 archive |
 
-### DEM (4 products)
+### Evapotranspiration (6 products)
+
+| ID | Variable | Source | Coverage | Resolution | Timestep | Notes |
+|---|---|---|---|---|---|---|
+| `MOD16_ET` | ET (actual) | GEE | Global | 500 m | 8-day → monthly | GEE auth required |
+| `TERRACLIMATE_AET` | ET (actual) | GEE | Global | 4.6 km | Monthly | GEE auth required |
+| `MOD16_PET` | PET | GEE | Global | 500 m | 8-day → monthly | GEE auth required |
+| `ERA5L_PET` | PET | GEE | Global | 11 km | Daily | GEE auth required |
+| `GRIDMET_PET` | PET | HyRiver | CONUS | 4 km | Daily | auth-free |
+| `OPEN_METEO_PET` | PET | Direct API | Global | 25 km | Daily | **auth-free** centroid-based |
+
+### DEM (5 products)
 
 | ID | Source | Coverage | Resolution | Notes |
 |---|---|---|---|---|
-| `GLO30` | GEE | Global | 30 m | Copernicus; primary global DEM |
-| `SRTM` | GEE | 60°S–60°N | 30 m | NASA SRTM v3 |
-| `MERIT_DEM` | GEE | Global | 90 m | Hydrologically conditioned |
-| `DEM3DEP_10M` | HyRiver | CONUS | 10 m | USGS 3DEP; highest resolution |
+| `GLO30` | GEE | Global | 30 m | Copernicus; primary global DEM; GEE auth required |
+| `SRTM` | GEE | 60°S–60°N | 30 m | NASA SRTM v3; GEE auth required |
+| `MERIT_DEM` | GEE | Global | 90 m | Hydrologically conditioned; GEE auth required |
+| `DEM3DEP_10M` | HyRiver | CONUS | 10 m | USGS 3DEP; highest CONUS resolution; auth-free |
+| `GLO30_STAC` | STAC | Global | 30 m | **auth-free** Copernicus GLO-30 via Planetary Computer |
 
 ### Soil Moisture (1 product)
 
@@ -240,13 +244,14 @@ check = data_validate_request(
 |---|---|---|---|---|
 | `SMAP_SM` | GEE | Global | 9 km | Daily (2015–present) |
 
-### Land Cover (3 products)
+### Land Cover (4 products)
 
 | ID | Source | Coverage | Notes |
 |---|---|---|---|
-| `NLCD` | HyRiver | CONUS | NLCD 2021; 30 m |
-| `ESA_WORLDCOVER` | GEE | Global | 10 m; 2020 & 2021 |
-| `DYNAMIC_WORLD` | GEE | Global | 10 m; Sentinel-2 derived |
+| `NLCD` | HyRiver | CONUS | NLCD 2021; 30 m; auth-free |
+| `ESA_WORLDCOVER` | GEE | Global | 10 m; 2020 & 2021; GEE auth required |
+| `DYNAMIC_WORLD` | GEE | Global | 10 m; Sentinel-2 derived; GEE auth required |
+| `ESA_WORLDCOVER_STAC` | STAC | Global | 10 m; **auth-free** via Planetary Computer |
 
 ### Soil Properties (2 products)
 
@@ -263,11 +268,24 @@ check = data_validate_request(
 | `SENTINEL2_NDVI` | NDVI | GEE | Global | 10 m | ~5 day revisit |
 | `MODIS_LAI` | LAI | GEE | Global | 500 m | 8-day composite |
 
-### Streamflow (1 product)
+### Optical (5 products)
+
+| ID | Source | Coverage | Resolution | Notes |
+|---|---|---|---|---|
+| `SENTINEL2_SR` | GEE | Global | 10 m | Surface reflectance; GEE auth required |
+| `LANDSAT9_SR` | GEE | Global | 30 m | Landsat 9 L2 SR; GEE auth required |
+| `LANDSAT8_SR` | GEE | Global | 30 m | Landsat 8 L2 SR; GEE auth required |
+| `SENTINEL2_SR_STAC` | STAC | Global | 10 m | **auth-free** via Planetary Computer |
+| `LANDSAT_SR_STAC` | STAC | Global | 30 m | **auth-free** Landsat C2 L2 via Planetary Computer |
+
+### Streamflow (4 products)
 
 | ID | Source | Coverage | Notes |
 |---|---|---|---|
-| `NWIS_STREAMFLOW` | Direct API | CONUS | USGS daily values; pass gauge ID as geometry |
+| `NWIS_STREAMFLOW` | Direct API | CONUS | USGS daily values; pass gauge ID as geometry; auth-free |
+| `GEOGLOWS_RETRO` | GEOGLOWS | Global | Modelled 1940–present via AWS Open Data Zarr; TDX-Hydro reach network; **auth-free** |
+| `OPENMETEO_FLOOD` | Direct API | Global | Open-Meteo river discharge model; centroid-snapped; **auth-free** |
+| `GLOFAS_STREAMFLOW` | CDS / GloFAS | Global | GloFAS v4 modelled discharge; requires free Copernicus CDS account + `~/.cdsapirc` |
 
 ---
 
@@ -302,7 +320,7 @@ FetchResult(data, product, source, citation, units, next_steps)
 
 ## Auth Setup
 
-### Google Earth Engine (20 products)
+### Google Earth Engine (23 products)
 
 ```bash
 # 1. Install
@@ -325,13 +343,25 @@ No auth required. Just install:
 pip install aihydro-data[hyriver]
 ```
 
-### CHIRPS IRI / NWIS (2 products)
+### Auth-free global products
 
 No auth required:
 
 ```bash
 pip install aihydro-data[opendap]    # CHIRPS_IRI — needs xarray + netCDF4
-# NWIS_STREAMFLOW works with [hyriver] — no extra auth
+pip install aihydro-data[geoglows]   # GEOGLOWS_RETRO — AWS Zarr; needs s3fs + zarr
+# NWIS_STREAMFLOW, OPEN_METEO_*, *_STAC all work with their respective extras; no auth
+```
+
+### GloFAS (modelled global streamflow)
+
+```bash
+pip install aihydro-data[glofas]
+
+# One-time: create a free Copernicus CDS account at cds.climate.copernicus.eu
+# then add your token to ~/.cdsapirc:
+# url: https://cds-beta.climate.copernicus.eu
+# key: <your-api-key>
 ```
 
 ---
@@ -368,22 +398,31 @@ aihydro_data/
 │
 ├── products/            ← Declarative variable registry (one file per variable)
 │   ├── precipitation.py     6 products
-│   ├── temperature.py       7 products
-│   ├── et.py                5 products
-│   ├── dem.py               4 products
+│   ├── temperature.py       9 products (tmax/tmin/tmean + Open-Meteo)
+│   ├── et.py                6 products (pet 4 + et 2)
+│   ├── dem.py               5 products
 │   ├── soil_moisture.py     1 product
-│   ├── landcover.py         3 products
+│   ├── landcover.py         4 products
 │   ├── soil.py              2 products
-│   ├── vegetation.py        3 products
-│   └── streamflow.py        1 product
+│   ├── vegetation.py        3 products (ndvi 2 + lai 1)
+│   ├── optical.py           5 products
+│   └── streamflow.py        4 products (NWIS + GEOGLOWS + Open-Meteo + GloFAS)
 │
 ├── sources/             ← Backend adapters (lazy imports — safe without extras)
 │   ├── base.py              SourceBackend ABC
-│   ├── gee.py               GEE backend (20 products)
+│   ├── gee/                 GEE backend package (23 products)
+│   │   ├── __init__.py          Backend class + fetch_timeseries/fetch_raster
+│   │   ├── _download.py         raster download helpers
+│   │   └── _composite.py        optical composite + spectral index helpers
 │   ├── hyriver.py           HyRiver backend (10 products)
-│   ├── direct_api.py        NWIS + CHIRPS IRI OPeNDAP (2 products)
-│   ├── stac.py              STAC/Planetary Computer (future)
-│   └── _gee_vendored/       GEE auth + timeseries helpers (vendored from aihydro-tools)
+│   ├── direct_api.py        NWIS + CHIRPS IRI OPeNDAP + Open-Meteo (5 products)
+│   ├── stac.py              STAC/Planetary Computer (4 products)
+│   ├── geoglows_retro.py    GEOGLOWS v2 retrospective via AWS Zarr (1 product)
+│   ├── openmeteo_flood.py   Open-Meteo river discharge (1 product)
+│   ├── cds_glofas.py        GloFAS via Copernicus CDS (1 product)
+│   ├── _common.py           require_import + assert_backend_available helpers
+│   ├── _retry.py            call_with_retry for transient HTTP errors
+│   └── _gee_vendored/       GEE auth + timeseries helpers
 │
 ├── routing/
 │   ├── regions.py           CONUS bbox, Pfafstetter region table
@@ -450,7 +489,7 @@ Every success carries `citation`, `bibtex`, `units`, `license`, and `next_steps`
 # Offline suite (no network, no auth — ~7 seconds)
 pytest -m "not live"
 
-# Live sweep — tests all 32 products against real backends (~13 minutes)
+# Live sweep — tests all 45 products against real backends (~15 minutes)
 # Requires GEE auth + internet
 pytest tests/test_live_sweep.py -v
 ```
@@ -459,9 +498,9 @@ pytest tests/test_live_sweep.py -v
 
 ## Status
 
-**v0.1.5** — Pre-PyPI development. 34 products live-tested; visualization layer (auto-plot, hydrology plots, multi-source compare, folium map preview); STAC backend with auth-free DEM + landcover; cookbook notebook with 10 recipes; multi-OS CI. Versioning stays on `0.1.x` until the first public PyPI release.
+**v0.2.0** — First public PyPI release. 45 products across 14 variables; global streamflow tri-source chain (GEOGLOWS/Open-Meteo/GloFAS); spatial-support honesty (point vs areal vs reach products declared and enforced); verify-on-read cache; `region` and `outlet` kwargs; structural refactor (gee/ package, MCP `@_tool_envelope`); 341 offline tests.
 
-See **[ROADMAP.md](ROADMAP.md)** for what's planned next, and **[examples/cookbook.ipynb](examples/cookbook.ipynb)** for 10 working recipes.
+See **[examples/cookbook.ipynb](examples/cookbook.ipynb)** for working recipes.
 
 | Phase | Status | Description |
 |---|---|---|
@@ -472,7 +511,7 @@ See **[ROADMAP.md](ROADMAP.md)** for what's planned next, and **[examples/cookbo
 | 5: Cache + provenance | ✅ | Disk cache, manifest, license tracking |
 | 6: Batch fetching | ✅ | Multi-geometry parallel dispatch |
 | 7: MCP tools | ✅ | 9 tools, help topics, doctor |
-| 8: PyPI publish | 🔲 | v0.2.0 release |
+| 8: PyPI publish | ✅ | v0.2.0 on PyPI (`pip install aihydro-data`) |
 
 ---
 
