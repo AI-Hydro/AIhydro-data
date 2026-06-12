@@ -48,6 +48,14 @@ AggregationMode = Literal[
     "raw_raster",   # return the full clipped raster as xarray.DataArray
 ]
 
+# What a product's values actually represent spatially. "areal" products can
+# honour basin_mean/basin_sum reductions; the rest return a single-location
+# series no matter what geometry is supplied:
+#   point        — value at one grid cell / coordinate (e.g. Open-Meteo centroid)
+#   reach        — modelled discharge for one river reach (GEOGLOWS, GloFAS)
+#   gauge_point  — observed value at a physical gauge (NWIS)
+SpatialSupport = Literal["areal", "point", "reach", "gauge_point"]
+
 
 class ProductSpec(BaseModel):
     """
@@ -75,6 +83,23 @@ class ProductSpec(BaseModel):
     resolution_m: int = Field(0, description="Native spatial resolution in metres (0 = vector/non-grid).")
     timestep: str = Field("", description="Native cadence: 'daily', 'hourly', 'monthly', 'static', ...")
     units: str = Field("", description="Native units, e.g. 'mm/day', 'K', 'm3/s'.")
+    spatial_support: SpatialSupport = Field(
+        "areal",
+        description=(
+            "What the values represent spatially. 'areal' products honour "
+            "basin_mean/basin_sum over the geometry; 'point'/'reach'/'gauge_point' "
+            "return a single-location series regardless of the geometry, so "
+            "basin_sum is rejected and basin_mean is reported as a point value."
+        ),
+    )
+    allow_empty: bool = Field(
+        False,
+        description=(
+            "If True, an empty/all-NaN result is accepted instead of triggering "
+            "fallback to the next product. Leave False for observational series; "
+            "set True only where 'no data' is a valid scientific answer."
+        ),
+    )
 
     # Provenance
     license: str = Field("", description="Plain-English licence summary.")
@@ -146,6 +171,14 @@ class FetchResult(BaseModel):
     license: str = ""
     citation: str = ""
     bibtex: str = ""
+
+    # Spatial-support honesty. `spatial_support` mirrors the served product's
+    # declared support; `aggregation_actual` records what the value really is
+    # — e.g. a basin_mean request served by a point backend reports
+    # "point_value" here (NOT an areal average), so downstream code and write-ups
+    # never mistake a single-cell series for a catchment aggregate.
+    spatial_support: str = "areal"
+    aggregation_actual: str = ""
 
     # Agent-facing affordances
     next_steps: list[dict[str, str]] = Field(default_factory=list)

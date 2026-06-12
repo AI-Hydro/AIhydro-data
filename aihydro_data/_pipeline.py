@@ -418,6 +418,17 @@ def fetch(
                 except Exception as ce:
                     log.debug("Cache write failed (non-fatal): %s", ce)
             return result
+        except _EmptyResult as empty:
+            # Empty-but-successful → reject (not "failed") and keep walking the
+            # chain. Recorded distinctly so the decision trail shows it was a
+            # data gap, not a backend error.
+            log.info("Product %r returned empty data; trying next in chain.", spec.id)
+            history.append({
+                "product": spec.id, "source": spec.source,
+                "outcome": "rejected", "reason": "empty result",
+            })
+            last_exc = empty
+            continue
         except Exception as exc:
             log.warning(
                 "Product %r failed (%s: %s); trying next in chain.",
@@ -449,6 +460,54 @@ def fetch(
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
+
+class _EmptyResult(Exception):
+    """Internal sentinel: a candidate returned no usable data. Caught by the
+    fetch() fallback loop and recorded as outcome='rejected' so the next
+    product is tried. Never surfaces to callers."""
+
+
+def _has_signal(data: Any) -> bool:
+    """True if `data` carries at least one finite value worth keeping.
+
+    Covers the time-series (DataFrame) and raster (xarray) cases; anything
+    else (None, unknown types) is conservatively treated as having signal so
+    we never reject a result we can't introspect. 'Finite' (not 'non-zero')
+    so a legitimately zero-valued series — categorical landcover, a dry-season
+    zero-flow record — still passes.
+    """
+    if data is None:
+        return False
+    try:
+        import numpy as np
+        import pandas as pd
+
+        if isinstance(data, pd.DataFrame):
+            if data.empty:
+                return False
+            num = data.select_dtypes("number")
+            if num.shape[1] == 0:
+                return len(data) > 0  # non-numeric (e.g. categorical) → trust it
+            return bool(np.isfinite(num.to_numpy(dtype="float64", na_value=np.nan)).any())
+
+        # xarray DataArray / Dataset
+        if hasattr(data, "to_array"):        # Dataset
+            if not data.data_vars:
+                return False
+            arr = data.to_array().values
+        elif hasattr(data, "values") and hasattr(data, "dims"):  # DataArray
+            arr = data.values
+        else:
+            return True
+        arr = np.asarray(arr)
+        if arr.size == 0:
+            return False
+        if np.issubdtype(arr.dtype, np.number):
+            return bool(np.isfinite(arr).any())
+        return True
+    except Exception:
+        return True
+
 
 def _is_registered(product_id: str) -> bool:
     """Return True if product_id is in the registry (ignore missing extras)."""
@@ -507,6 +566,41 @@ def _fetch_one(
     if spec.timestep == "static" and _agg != "raw_raster":
         _agg = "raw_raster"
 
+    # ── Spatial-support honesty (S1) ──────────────────────────────────────────
+    # A point/reach/gauge product returns a single-location series. basin_sum
+    # over such a value is spatially meaningless → reject so an areal product
+    # can serve via the fallback chain. basin_mean is allowed but recorded as a
+    # point value (NOT an areal average) in aggregation_actual + a note.
+    support = getattr(spec, "spatial_support", "areal")
+    agg_actual = _agg
+    support_note: Optional[str] = None
+    if support != "areal" and _agg not in ("raw_raster",):
+        if _agg == "basin_sum":
+            from aihydro_data.exceptions import AggregationUnsupported
+            raise AggregationUnsupported(
+                code="AGGREGATION_UNSUPPORTED",
+                message=(
+                    f"Product {spec.id!r} has {support!r} spatial support — its "
+                    f"values are at a single {support.replace('_', ' ')}, so "
+                    f"aggregation='basin_sum' (a catchment total) is not meaningful."
+                ),
+                recovery=(
+                    "Use aggregation='basin_mean' to accept the single-location "
+                    "series, or rely on the fallback chain to reach an areal "
+                    "(gridded) product that can be summed over the basin."
+                ),
+                details={"product": spec.id, "spatial_support": support},
+                next_tools=["data_list_products"],
+                docs_anchor="aggregation",
+            )
+        # basin_mean / centroid on a non-areal product → single-location value
+        agg_actual = f"{support}_value"
+        support_note = (
+            f"Values are a single {support.replace('_', ' ')} series from "
+            f"{spec.id!r}, NOT an areal average over the geometry "
+            f"(spatial_support={support!r})."
+        )
+
     # Multi-band optical composites (variable='optical') return an xr.Dataset
     # of named reflectance bands via a dedicated backend method, regardless of
     # the requested aggregation. compute_spectral_index rides this path to get
@@ -539,6 +633,16 @@ def _fetch_one(
     else:
         data = backend.fetch_timeseries(spec, geom, start, end, _agg)
 
+    # ── Empty-result gate (S3) ────────────────────────────────────────────────
+    # A backend that returns no usable data (e.g. NWIS with no record for the
+    # gauge/window) is treated as a failed candidate so the fallback chain keeps
+    # going, UNLESS the product opts in via allow_empty. Raised before the
+    # result is built so empties are never cached.
+    if not getattr(spec, "allow_empty", False) and not _has_signal(data):
+        raise _EmptyResult(
+            f"{spec.id!r} returned no usable data for {start}..{end}."
+        )
+
     # Harvest backend-attached caveats (e.g. "polygon mask failed") so
     # degradations surface on the result instead of dying in debug logs.
     notes: list[str] = []
@@ -546,6 +650,8 @@ def _fetch_one(
         notes = [str(n) for n in getattr(data, "attrs", {}).get("aihydro_notes", [])]
     except Exception:
         pass
+    if support_note:
+        notes.insert(0, support_note)
 
     return FetchResult(
         variable=spec.variable,
@@ -556,6 +662,8 @@ def _fetch_one(
         license=spec.license,
         citation=spec.citation,
         bibtex=spec.bibtex,
+        spatial_support=support,
+        aggregation_actual=agg_actual,
         next_steps=list(spec.next_steps),
         notes=notes,
     )

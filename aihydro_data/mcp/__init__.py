@@ -77,6 +77,10 @@ def _result_to_dict(result: Any) -> dict[str, Any]:
         "fetched_at": result.fetched_at,
         "license": result.license,
         "citation": result.citation,
+        # Spatial-support honesty: tells the agent whether `data` is an areal
+        # aggregate or a single-location (point/reach/gauge) series.
+        "spatial_support": getattr(result, "spatial_support", "areal"),
+        "aggregation_actual": getattr(result, "aggregation_actual", ""),
         "next_steps": result.next_steps,
         "notes": result.notes,
         "data": data_summary,

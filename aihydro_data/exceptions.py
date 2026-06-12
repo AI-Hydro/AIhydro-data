@@ -76,6 +76,13 @@ class GeometryInvalid(AihydroDataError):
     object, or it has zero area / null CRS / etc."""
 
 
+class AggregationUnsupported(AihydroDataError):
+    """The requested aggregation is spatially meaningless for the product's
+    support — e.g. ``basin_sum`` against a point/reach product (Open-Meteo,
+    GEOGLOWS, NWIS): a single-location value cannot be summed over a basin.
+    Raised inside the fallback walk so an areal product can serve instead."""
+
+
 class FetchTooLarge(AihydroDataError):
     """Estimated request volume exceeds the per-call ceiling. Recovery
     suggests splitting into batches via `data_fetch` with `aggregation=

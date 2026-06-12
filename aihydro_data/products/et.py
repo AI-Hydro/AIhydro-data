@@ -263,6 +263,7 @@ PRODUCTS: list[ProductSpec] = [
         variable="pet",
         source="direct_api",
         source_dataset_id="open-meteo-era5",
+        spatial_support="point",  # FAO-56 ET0 at the centroid cell, not areal
         coverage=["global"],
         temporal_start="1940-01-01",
         temporal_end="present",

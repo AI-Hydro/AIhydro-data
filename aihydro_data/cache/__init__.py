@@ -121,6 +121,8 @@ def cache_read(ck: str, req: Optional["FetchRequest"] = None) -> Optional["Fetch
         license=manifest.license,
         citation=manifest.citation,
         bibtex=manifest.bibtex,
+        spatial_support=getattr(manifest, "spatial_support", "areal"),
+        aggregation_actual=getattr(manifest, "aggregation_actual", ""),
         next_steps=[],
         notes=[f"Served from disk cache (fetched {manifest.fetched_at[:10]})."],
     )
@@ -220,6 +222,8 @@ def cache_write(result: "FetchResult", geom_wkt: str = "") -> None:
         citation=result.citation,
         bibtex=result.bibtex,
         data_file=data_file,
+        spatial_support=getattr(result, "spatial_support", "areal"),
+        aggregation_actual=getattr(result, "aggregation_actual", ""),
     )
     try:
         write_manifest(d, entry)

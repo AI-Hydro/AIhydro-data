@@ -44,6 +44,8 @@ class ManifestEntry:
         bibtex: str = "",
         data_file: str = "",
         notes: list[str] | None = None,
+        spatial_support: str = "areal",
+        aggregation_actual: str = "",
     ) -> None:
         self.cache_key = cache_key
         self.variable = variable
@@ -59,6 +61,8 @@ class ManifestEntry:
         self.bibtex = bibtex
         self.data_file = data_file
         self.notes = notes or []
+        self.spatial_support = spatial_support
+        self.aggregation_actual = aggregation_actual
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -76,6 +80,8 @@ class ManifestEntry:
             "bibtex": self.bibtex,
             "data_file": self.data_file,
             "notes": self.notes,
+            "spatial_support": self.spatial_support,
+            "aggregation_actual": self.aggregation_actual,
         }
 
     @classmethod
@@ -95,6 +101,8 @@ class ManifestEntry:
             bibtex=d.get("bibtex", ""),
             data_file=d.get("data_file", ""),
             notes=d.get("notes", []),
+            spatial_support=d.get("spatial_support", "areal"),
+            aggregation_actual=d.get("aggregation_actual", ""),
         )
 
 
