@@ -142,6 +142,11 @@ class FetchRequest(BaseModel):
     aggregation: AggregationMode = "basin_mean"
     cache: bool = True
 
+    # Optional routing/snapping overrides
+    region: Optional[str] = None       # skip auto region detection (a CoverageTag)
+    outlet: Optional[tuple[float, float]] = None  # (lat, lon) snap target for
+    #                                              reach/gauge backends
+
     # Internal — filled in by the router, not the user
     detected_region: Optional[str] = None
     resolved_product: Optional[str] = None

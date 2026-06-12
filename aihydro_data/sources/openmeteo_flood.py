@@ -77,8 +77,13 @@ class Backend(SourceBackend):
         start: str,
         end: str,
         aggregation: AggregationMode,
+        outlet: Optional[tuple[float, float]] = None,
     ) -> Any:
         """Return daily river discharge at `geometry`'s outlet/centroid.
+
+        `outlet` (lat, lon), when supplied, overrides the centroid as the query
+        point — supply a main-stem pour point so the 0.05° cell pick lands on
+        the channel rather than a hillslope.
 
         Returns pd.DataFrame[date, streamflow]  (streamflow in m³/s).
         """
@@ -86,7 +91,10 @@ class Backend(SourceBackend):
         import requests
         from aihydro_data.exceptions import SourceUnavailable, DateOutOfRange
 
-        lat, lon = self._outlet(geometry)
+        if outlet is not None:
+            lat, lon = float(outlet[0]), float(outlet[1])
+        else:
+            lat, lon = self._outlet(geometry)
         area_km2 = self._polygon_area_km2(geometry)   # None for bare-point inputs
         cfg = spec.backend_config
 

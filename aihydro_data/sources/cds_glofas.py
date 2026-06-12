@@ -101,8 +101,13 @@ class Backend(SourceBackend):
         start: str,
         end: str,
         aggregation: AggregationMode,
+        outlet: Optional[tuple[float, float]] = None,
     ) -> Any:
         """Snap `geometry` to the GloFAS main-channel cell and return daily Q.
+
+        `outlet` (lat, lon), when supplied, overrides the geometry centroid as
+        the snap origin — pass a delineated pour point for the most reliable
+        main-channel cell pick.
 
         Returns a pd.DataFrame[date, streamflow]  (streamflow in m³/s).
         """
@@ -111,6 +116,10 @@ class Backend(SourceBackend):
 
         cfg = spec.backend_config
         outlet_lat, outlet_lon, target_area_km2, polygon = self._outlet_and_area(geometry)
+        if outlet is not None:
+            outlet_lat, outlet_lon = float(outlet[0]), float(outlet[1])
+            log.info("GloFAS: using caller-supplied outlet (%.4f, %.4f) for snap.",
+                     outlet_lat, outlet_lon)
 
         # 1. Download a discharge window around the outlet for the date range.
         ds = self._retrieve_window(cfg, outlet_lat, outlet_lon, start, end)

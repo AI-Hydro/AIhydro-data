@@ -152,6 +152,8 @@ def _data_fetch(
     product: str | None = None,
     aggregation: str = "basin_mean",
     cache: bool = True,
+    region: str | None = None,
+    outlet: tuple[float, float] | None = None,
 ) -> dict[str, Any]:
     """
     Fetch a single hydrology variable for one geometry / time window.
@@ -227,6 +229,8 @@ def _data_fetch(
             product=product,
             aggregation=aggregation,  # type: ignore[arg-type]
             cache=cache,
+            region=region,
+            outlet=tuple(outlet) if outlet else None,
         )
         return _result_to_dict(result)
     except AihydroDataError as exc:

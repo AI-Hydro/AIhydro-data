@@ -93,8 +93,13 @@ class Backend(SourceBackend):
         start: str,
         end: str,
         aggregation: AggregationMode,
+        outlet: Optional[tuple[float, float]] = None,
     ) -> Any:
         """Snap `geometry` to a GEOGLOWS reach and return daily Q.
+
+        `outlet` (lat, lon), when supplied, is used as the snap target instead
+        of the geometry centroid — pass a delineated basin pour point for the
+        most reliable main-channel snap (the centroid often sits off-channel).
 
         Returns pd.DataFrame[date, streamflow]  (streamflow in m³/s).
         """
@@ -103,6 +108,10 @@ class Backend(SourceBackend):
         import geoglows
 
         outlet_lat, outlet_lon, target_area_km2 = self._outlet_and_area(geometry)
+        if outlet is not None:
+            outlet_lat, outlet_lon = float(outlet[0]), float(outlet[1])
+            log.info("GEOGLOWS: using caller-supplied outlet (%.4f, %.4f) for snap.",
+                     outlet_lat, outlet_lon)
 
         # Warn for bare-point input — snapping is unreliable without basin area.
         if target_area_km2 is None:

@@ -171,6 +171,8 @@ def fetch(
     index: Optional[str] = None,
     native_resolution: bool = False,
     validate: Optional[Callable[[FetchResult], bool]] = None,
+    region: Optional[str] = None,
+    outlet: Optional[tuple[float, float]] = None,
 ) -> FetchResult:
     """
     Fetch one variable for one geometry/time window.
@@ -221,6 +223,18 @@ def fetch(
         temperature / temp → tmean  |  precip / rain → precipitation
         discharge / flow   → streamflow  |  elevation / altitude → dem
         land_cover / lulc  → landcover   |  evapotranspiration   → et
+
+    Routing / snapping overrides:
+        region: Pin the routing region (a CoverageTag like 'EUROPE', 'CONUS')
+            instead of auto-detecting it from the geometry centroid/bbox. Use
+            when a basin straddles a region boundary or auto-detection picks
+            the wrong continental chain. Invalid tags raise REGION_INVALID.
+            (Note: auto-detection is centroid/bbox-based; a GaugeID always
+            routes to CONUS.)
+        outlet: (lat, lon) snap target for reach/gauge backends (GEOGLOWS,
+            GloFAS, Open-Meteo Flood). Defaults to the geometry centroid, which
+            often sits off-channel; pass a delineated basin pour point for the
+            most reliable main-stem snap. Ignored by areal/gridded backends.
     """
     # ── -1. Normalise variable name (alias table + lower/strip) ──────────
     variable = _normalise_variable(variable)
@@ -264,6 +278,23 @@ def fetch(
         return BatchResult(results, errors, batch["labels"])
 
     # ── 1. Validate ───────────────────────────────────────────────────────
+    # Region override (S4): if the caller pins a region, validate it against the
+    # known CoverageTags so a typo fails loudly instead of silently routing to
+    # the global chain.
+    if region is not None:
+        from typing import get_args
+        from aihydro_data.contracts import CoverageTag
+        valid_regions = set(get_args(CoverageTag))
+        if region not in valid_regions:
+            from aihydro_data.exceptions import RegionUnsupported
+            raise RegionUnsupported(
+                code="REGION_INVALID",
+                message=f"region={region!r} is not a known CoverageTag.",
+                recovery=f"Use one of: {sorted(valid_regions)}, or omit region to auto-detect.",
+                next_tools=["data_list_products"],
+                docs_anchor="routing",
+            )
+
     req = FetchRequest(
         variable=variable,
         geometry=geometry,
@@ -274,6 +305,8 @@ def fetch(
         fallback=fallback,
         aggregation=aggregation,
         cache=cache,
+        region=region,
+        outlet=outlet,
     )
 
     # ── 2. Coerce geometry ────────────────────────────────────────────────
@@ -284,7 +317,8 @@ def fetch(
     from aihydro_data.routing import detect_region, resolve_product_ids
     from aihydro_data.products import get_product
 
-    region = detect_region(geom)
+    # Region override (S4) short-circuits centroid/bbox auto-detection.
+    region = req.region if req.region is not None else detect_region(geom)
 
     if mode == "manual" and product:
         primary_spec = get_product(product)
@@ -366,9 +400,15 @@ def fetch(
     ck = _make_key(key_payload)
 
     if cache:
-        cached = cache_read(ck, req)
+        # Verify-on-read (S2): the auto-mode key is product-agnostic, so a
+        # cached entry whose serving product is no longer in the current
+        # candidate chain (policy changed, or a different region was detected)
+        # must be treated as a MISS — never serve data a current request would
+        # never have selected. Manual pins already key on the product.
+        allowed = None if (mode == "manual" and product) else [s.id for s in candidate_specs]
+        cached = cache_read(ck, req, allowed_products=allowed)
         if cached is not None:
-            log.debug("Cache hit for %s (%s).", ck, variable)
+            log.debug("Cache hit for %s (%s, product=%s).", ck, variable, cached.product)
             return cached
 
     # ── 5. Fetch with fallback chain ──────────────────────────────────────
@@ -631,7 +671,12 @@ def _fetch_one(
         data = _call(backend.fetch_raster, spec, geom, start, end,
                      native_resolution=native_resolution)
     else:
-        data = backend.fetch_timeseries(spec, geom, start, end, _agg)
+        # Route through _call so optional kwargs (outlet, for reach/gauge
+        # snapping backends) degrade gracefully on backends that don't accept
+        # them. outlet lets callers pass a delineated pour point instead of the
+        # geometry centroid for GEOGLOWS/GloFAS/Open-Meteo snapping (S5).
+        data = _call(backend.fetch_timeseries, spec, geom, start, end, _agg,
+                     outlet=getattr(req, "outlet", None))
 
     # ── Empty-result gate (S3) ────────────────────────────────────────────────
     # A backend that returns no usable data (e.g. NWIS with no record for the

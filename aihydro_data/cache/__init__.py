@@ -57,12 +57,23 @@ def cache_dir() -> Path:
 
 # ── Read ──────────────────────────────────────────────────────────────────
 
-def cache_read(ck: str, req: Optional["FetchRequest"] = None) -> Optional["FetchResult"]:
+def cache_read(
+    ck: str,
+    req: Optional["FetchRequest"] = None,
+    allowed_products: Optional[list[str]] = None,
+) -> Optional["FetchResult"]:
     """
     Return a cached FetchResult if one exists for `ck`, else None.
 
     Reads .parquet (time series) or .nc (raster) depending on whichever
     file exists. Reconstructs a FetchResult from the manifest sidecar.
+
+    `allowed_products` (verify-on-read): when given, a cached entry whose
+    serving product is NOT in this list is treated as a miss. The auto-mode
+    cache key is product-agnostic, so this guards against serving data that
+    the current routing policy would never select (policy change, different
+    detected region). Pass the current candidate chain's product ids; pass
+    None to disable the check (manual pins, which already key on product).
     """
     from aihydro_data.cache.manifest import latest_manifest
 
@@ -76,6 +87,14 @@ def cache_read(ck: str, req: Optional["FetchRequest"] = None) -> Optional["Fetch
     manifest = latest_manifest(d, ck)
     if manifest is None:
         log.warning("Cache hit for %s but no manifest — skipping.", ck)
+        return None
+
+    if allowed_products is not None and manifest.product not in allowed_products:
+        log.debug(
+            "Cache entry %s served by %r is not in the current candidate chain "
+            "%s — treating as miss (verify-on-read).",
+            ck, manifest.product, allowed_products,
+        )
         return None
 
     try:
