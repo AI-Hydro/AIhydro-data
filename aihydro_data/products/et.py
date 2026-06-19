@@ -254,6 +254,65 @@ PRODUCTS: list[ProductSpec] = [
         backend_config={"pygridmet_variable": "pet"},
     ),
 
+    # ── OpenET Ensemble ET (CONUS, Landsat 30m, 2016-present) ─────────────
+    # Field-validated ensemble of six ET models (disALEXI, eeMETRIC, geeSEBAL,
+    # PT-JPL, SIMS, SSEBop) anchored to eddy-covariance tower data across CONUS.
+    # Primary source for R2 satellite-ET identifiability test because it resolves
+    # individual land-cover patches at Landsat resolution and carries uncertainty
+    # (ensemble spread) that can be compared to HRU-type ET predictions.
+    ProductSpec(
+        id="OPENET_ENSEMBLE",
+        variable="et",
+        source="gee",
+        source_dataset_id="OpenET/ENSEMBLE/CONUS/GRIDMET/MONTHLY/v2_0",
+        coverage=["CONUS"],
+        temporal_start="2016-01-01",
+        temporal_end="present",
+        resolution_m=30,
+        timestep="monthly",
+        units="mm/month",
+        license="CC BY 4.0 (OpenET consortium)",
+        citation=(
+            "Melton, F. S. et al. (2022). OpenET: Filling a Critical Data Gap in Water "
+            "Management for the Western United States. JAWRA 58(6), 971-994. "
+            "https://doi.org/10.1111/1752-1688.12956"
+        ),
+        bibtex=(
+            "@article{melton2022openet,\n"
+            "  author  = {Melton, Forrest S. and others},\n"
+            "  title   = {{OpenET}: Filling a Critical Data Gap in Water Management for the Western United States},\n"
+            "  journal = {JAWRA},\n"
+            "  year    = {2022},\n"
+            "  volume  = {58},\n"
+            "  number  = {6},\n"
+            "  pages   = {971--994},\n"
+            "  doi     = {10.1111/1752-1688.12956}\n"
+            "}"
+        ),
+        homepage="https://openetdata.org/",
+        requires_extras=["gee"],
+        requires_auth=["gee"],
+        common_pitfalls=[
+            "CONUS only — use MOD16_ET for global coverage.",
+            "Available from January 2016; does not cover the pre-2016 period.",
+            "30 m Landsat resolution — GEE region download may be large for big basins.",
+            "Band et_ensemble_mad is the ensemble median; et_ensemble_mad_mad is the spread.",
+            "GEE auth required (project must have Earth Engine API enabled).",
+        ],
+        examples=[
+            "fetch('et', gdf, '2018-01-01', '2022-12-31', mode='manual', product='OPENET_ENSEMBLE')",
+            "fetch('et', gdf, '2018-01-01', '2022-12-31')  # CONUS → OpenET primary",
+        ],
+        next_steps=_ET_NEXT_STEPS,
+        backend_config={
+            "gee_dataset_id": "OpenET/ENSEMBLE/CONUS/GRIDMET/MONTHLY/v2_0",
+            "band": "et_ensemble_mad",
+            "scale_m": 30,
+            "unit_conversion": 1.0,   # already mm/month
+            "agg_to_monthly": False,  # already monthly
+        },
+    ),
+
     # ── Open-Meteo PET (FAO-56 ET0, no auth, global, 1940-present) ───────
     # Auth-free fallback for PET when GEE is unavailable or unauthed.
     # Returns FAO-56 Penman-Monteith grass reference ET0 (mm/day).

@@ -72,9 +72,10 @@ PRODUCT_POLICY: dict[tuple[str, str], list[str]] = {
     ("soil", "global"):                 ["SOILGRIDS"],
 
     # ── Evapotranspiration ────────────────────────────────────────────────
-    # OPEN_METEO_PET (FAO-56 ET0) is the auth-free non-GEE fallback for pet —
-    # last in every chain so it only activates when ERA5L/MOD16 (GEE) fail.
-    ("et",  "CONUS"):                   ["MOD16_ET",  "TERRACLIMATE_AET",  "ERA5L_PET"],
+    # CONUS: OpenET ensemble (field-validated, 30 m Landsat) is primary for 2016+;
+    # MOD16 fills pre-2016 and serves as fallback. OPEN_METEO_PET is the auth-free
+    # non-GEE fallback for pet — last in every chain.
+    ("et",  "CONUS"):                   ["OPENET_ENSEMBLE", "MOD16_ET", "TERRACLIMATE_AET", "ERA5L_PET"],
     ("et",  "global"):                  ["MOD16_ET",  "TERRACLIMATE_AET",  "ERA5L_PET"],
     ("pet", "CONUS"):                   ["GRIDMET_PET", "MOD16_PET", "ERA5L_PET", "OPEN_METEO_PET"],
     ("pet", "global"):                  ["ERA5L_PET", "MOD16_PET", "OPEN_METEO_PET"],
@@ -88,6 +89,16 @@ PRODUCT_POLICY: dict[tuple[str, str], list[str]] = {
     ("dem", "CONUS"):                   ["GLO30", "DEM3DEP_10M", "SRTM", "GLO30_STAC"],
     ("dem", "NORTH_AMERICA"):           ["GLO30", "DEM3DEP_10M", "SRTM", "GLO30_STAC"],
     ("dem", "global"):                  ["GLO30", "SRTM", "MERIT_DEM", "GLO30_STAC"],
+
+    # ── Impervious cover ──────────────────────────────────────────────────
+    # CONUS: NLCD 30 m via HyRiver (no auth); global fallback via GHSL 100 m GEE.
+    ("impervious", "CONUS"):            ["NLCD_IMPERVIOUS", "GHSL_BUILT_UP"],
+    ("impervious", "NORTH_AMERICA"):    ["NLCD_IMPERVIOUS", "GHSL_BUILT_UP"],
+    ("impervious", "global"):           ["GHSL_BUILT_UP"],
+
+    # ── Depth to bedrock ──────────────────────────────────────────────────
+    ("bedrock_depth", "global"):        ["OPENLANDMAP_BEDROCK"],
+    ("bedrock_depth", "CONUS"):         ["OPENLANDMAP_BEDROCK"],
 
     # ── Soil Moisture ─────────────────────────────────────────────────────
     ("soil_moisture", "global"):        ["SMAP_SM"],

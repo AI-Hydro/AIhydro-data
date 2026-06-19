@@ -68,6 +68,63 @@ PRODUCTS: list[ProductSpec] = [
         },
     ),
 
+    # ── OpenLandMap Depth-to-Bedrock (global, 250 m, GEE) ────────────────
+    # USDA/Simard depth-to-bedrock in metres (0–340 m). Static product derived
+    # from MODIS, SRTM, climatic indices and soil surveys. Critical for the
+    # water-storage capacity of a basin (T2.4): shallow bedrock → limited
+    # groundwater storage; deep sediment → large TWS buffer.
+    ProductSpec(
+        id="OPENLANDMAP_BEDROCK",
+        variable="bedrock_depth",
+        source="gee",
+        source_dataset_id="OpenLandMap/SOL/SOL_DEPTH-TO-BEDROCK_USDA-SIMARD_M/v01",
+        coverage=["global"],
+        temporal_start="",
+        temporal_end="",
+        resolution_m=250,
+        timestep="static",
+        units="m",
+        license="CC BY 4.0 (OpenLandMap / USDA)",
+        citation=(
+            "Shangguan, W. et al. (2017). Mapping the global depth to bedrock for land "
+            "surface modelling. Journal of Advances in Modeling Earth Systems 9(1), 65-88. "
+            "https://doi.org/10.1002/2016MS000686"
+        ),
+        bibtex=(
+            "@article{shangguan2017bedrock,\n"
+            "  author  = {Shangguan, Wei and others},\n"
+            "  title   = {Mapping the global depth to bedrock for land surface modelling},\n"
+            "  journal = {Journal of Advances in Modeling Earth Systems},\n"
+            "  year    = {2017},\n"
+            "  volume  = {9},\n"
+            "  number  = {1},\n"
+            "  pages   = {65--88},\n"
+            "  doi     = {10.1002/2016MS000686}\n"
+            "}"
+        ),
+        homepage="https://openlandmap.org/",
+        requires_extras=["gee"],
+        requires_auth=["gee"],
+        common_pitfalls=[
+            "Values are integer centimetres — backend converts to metres (÷100).",
+            "Range 0–3400 cm (0–34 m); capped at 34 m in some regions.",
+            "Static product — start/end dates are ignored.",
+            "GEE auth required.",
+        ],
+        examples=[
+            "fetch('bedrock_depth', gdf, '2020-01-01', '2020-12-31')  # static → depth in metres",
+            "fetch('bedrock_depth', gdf, '2020-01-01', '2020-12-31', mode='manual', product='OPENLANDMAP_BEDROCK')",
+        ],
+        next_steps=_SOIL_NEXT_STEPS,
+        backend_config={
+            "gee_dataset_id": "OpenLandMap/SOL/SOL_DEPTH-TO-BEDROCK_USDA-SIMARD_M/v01",
+            "band": "b0",
+            "scale_m": 250,
+            "unit_conversion": 0.01,   # cm → m
+            "static": True,
+        },
+    ),
+
     ProductSpec(
         id="SOILGRIDS",
         variable="soil",
