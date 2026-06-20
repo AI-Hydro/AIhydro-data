@@ -79,6 +79,11 @@ _VARIABLE_ALIASES: dict[str, str] = {
     "imagery":              "optical",
     "satellite":            "optical",
     "remote_sensing":       "optical",
+    # Flood
+    "flood":                "flood_inundation",
+    "inundation":           "flood_inundation",
+    "observed_flood":       "flood_inundation",
+    "gfm":                  "flood_inundation",
 }
 
 

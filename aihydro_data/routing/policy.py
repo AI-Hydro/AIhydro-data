@@ -109,6 +109,10 @@ PRODUCT_POLICY: dict[tuple[str, str], list[str]] = {
     ("ndvi", "CONUS"):                  ["MODIS_NDVI", "SENTINEL2_NDVI"],
     ("lai",  "global"):                 ["MODIS_LAI"],
 
+    # ── Observed flood inundation (GFM SAR) ───────────────────────────────
+    ("flood_inundation", "global"):     ["GFM_S1_INUNDATION"],
+    ("flood_inundation", "CONUS"):      ["GFM_S1_INUNDATION"],
+
     # ── Optical surface reflectance (multi-band composites) ───────────────
     # Raw bands for local spectral-index computation (NDWI, MNDWI, NBR, …).
     # Sentinel-2 is primary (10 m); Landsat 9/8 fall back at 30 m with longer
