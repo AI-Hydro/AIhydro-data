@@ -86,9 +86,15 @@ PRODUCT_POLICY: dict[tuple[str, str], list[str]] = {
     # GLO30 (GEE, 30 m) is reliable for any size and serves as the primary CONUS
     # source; DEM3DEP_10M remains in the chain for callers who pin it manually or
     # need 10 m resolution on small basins where it succeeds.
-    ("dem", "CONUS"):                   ["GLO30", "DEM3DEP_10M", "SRTM", "GLO30_STAC"],
-    ("dem", "NORTH_AMERICA"):           ["GLO30", "DEM3DEP_10M", "SRTM", "GLO30_STAC"],
-    ("dem", "global"):                  ["GLO30", "SRTM", "MERIT_DEM", "GLO30_STAC"],
+    #
+    # STAC tail: GLO30_STAC (Planetary Computer) → GLO30_ELEMENT84 (Element84 /
+    # AWS).  Both serve the same Copernicus DEM GLO-30 COGs from independent
+    # infrastructure.  GLO30_STAC's backend already auto-falls-back to Element84
+    # on PC timeout, so GLO30_ELEMENT84 here is the explicit routing-level
+    # backstop (reached only if GLO30_STAC raises SourceUnavailable).
+    ("dem", "CONUS"):                   ["GLO30", "DEM3DEP_10M", "SRTM", "GLO30_STAC", "GLO30_ELEMENT84"],
+    ("dem", "NORTH_AMERICA"):           ["GLO30", "DEM3DEP_10M", "SRTM", "GLO30_STAC", "GLO30_ELEMENT84"],
+    ("dem", "global"):                  ["GLO30", "SRTM", "MERIT_DEM", "GLO30_STAC", "GLO30_ELEMENT84"],
 
     # ── Impervious cover ──────────────────────────────────────────────────
     # CONUS: NLCD 30 m via HyRiver (no auth); global fallback via GHSL 100 m GEE.

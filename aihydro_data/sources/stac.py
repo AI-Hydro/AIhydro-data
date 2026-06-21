@@ -13,10 +13,27 @@ Most COG-based collections work with this backend; NetCDF-only datasets
 here yet.
 
 Install: pip install aihydro-data[stac]
+
+Robustness model
+----------------
+Every external call goes through ``_retry_search`` / ``_retry_load``, which
+applies exponential-backoff retries on transient network errors.  When ALL
+retries against a given catalog endpoint fail, ``_search_with_catalog_fallback``
+automatically switches to the next endpoint in the provider chain.  The chain
+for any given product is:
+
+  1. Primary endpoint from ``backend_config["stac_endpoint"]`` (default: PC)
+  2. Element84 Earth Search (``_ES_STAC_URL``) — independent AWS-hosted mirror
+     of the same Copernicus / Sentinel collections; no PC token required.
+
+This means a Planetary Computer timeout never kills the whole call — it
+degrades to Element84 instead.
 """
 from __future__ import annotations
 
 import logging
+import time
+import warnings
 from typing import Any, Optional
 
 from aihydro_data.contracts import AggregationMode, ProductSpec
@@ -26,8 +43,37 @@ log = logging.getLogger(__name__)
 
 # Primary catalog: Microsoft Planetary Computer (auto-signs assets).
 _PC_STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
-# Fallback: Element84 Earth Search (Sentinel-2, Landsat).
+# Fallback: Element84 Earth Search (Sentinel-2, Landsat, Copernicus DEM).
 _ES_STAC_URL = "https://earth-search.aws.element84.com/v1"
+
+# Errors that indicate a transient network/infrastructure issue (retry-able).
+_RETRYABLE_PATTERNS = ("timeout", "time", "connection", "network", "exceeded",
+                       "502", "503", "504", "gateway", "service unavailable")
+
+# Maximum wall-clock seconds we wait across all retries for one STAC call.
+_MAX_RETRY_WAIT_S = 90
+
+
+def _is_retryable(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(p in msg for p in _RETRYABLE_PATTERNS)
+
+
+def _retry(func, *, max_retries: int = 3, base_delay: float = 2.0, label: str = ""):
+    """Call *func* up to *max_retries* times, backing off on transient errors."""
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except Exception as exc:
+            if attempt < max_retries - 1 and _is_retryable(exc):
+                wait = min(base_delay * (2 ** attempt), _MAX_RETRY_WAIT_S)
+                warnings.warn(
+                    f"STAC {label} transient error (attempt {attempt + 1}/{max_retries}, "
+                    f"retry in {wait:.0f}s): {exc}"
+                )
+                time.sleep(wait)
+            else:
+                raise
 
 
 class Backend(SourceBackend):
@@ -81,12 +127,10 @@ class Backend(SourceBackend):
         self._assert_available()
         raster = self.fetch_raster(spec, geometry, start, end)
 
-        # Apply spatial reducer
         import pandas as pd
         import numpy as np
 
         if "time" not in raster.dims:
-            # Static product — reduce to a single value
             value = float(np.asarray(raster).mean())
             return pd.DataFrame({"date": [pd.Timestamp(start)],
                                  spec.variable: [value]})
@@ -96,7 +140,6 @@ class Backend(SourceBackend):
         elif aggregation == "basin_sum":
             series = raster.sum(dim=[d for d in raster.dims if d != "time"])
         else:
-            # raw_raster — caller wants the cube; return mean for ts compat
             series = raster.mean(dim=[d for d in raster.dims if d != "time"])
 
         dates = pd.to_datetime(series.time.values)
@@ -111,40 +154,73 @@ class Backend(SourceBackend):
         start: str,
         end: str,
     ) -> Any:
-        """Stack the matching STAC items into an xarray DataArray."""
+        """Stack the matching STAC items into an xarray DataArray.
+
+        Tries the primary catalog endpoint first (usually Planetary Computer),
+        then falls back to Element84 Earth Search if the primary endpoint
+        returns transient errors on all retry attempts.
+        """
         self._assert_available()
 
         cfg = spec.backend_config
         collection = cfg.get("stac_collection") or spec.source_dataset_id
         asset = cfg.get("stac_asset", "data")
-        endpoint = cfg.get("stac_endpoint", _PC_STAC_URL)
+        primary_endpoint = cfg.get("stac_endpoint", _PC_STAC_URL)
         query = cfg.get("stac_query", {})
         resolution = cfg.get("stac_resolution", spec.resolution_m or 30)
         unit_conversion = cfg.get("unit_conversion", 1.0)
 
-        catalog = self._open_catalog(endpoint)
-
-        # Build bbox from geometry
         bbox = self._geometry_to_bbox(geometry)
-
-        # For static collections, drop the datetime filter
         datetime_filter = None if spec.timestep == "static" else f"{start}/{end}"
 
-        search = catalog.search(
-            collections=[collection],
-            bbox=bbox,
-            datetime=datetime_filter,
-            query=query or None,
-            limit=cfg.get("stac_limit", 100),
-        )
-        items = list(search.items())
+        # Build the ordered catalog fallback chain.  Element84 is added as a
+        # fallback only if the primary is Planetary Computer (same collections,
+        # no signing required).
+        endpoints = [primary_endpoint]
+        if primary_endpoint == _PC_STAC_URL and _ES_STAC_URL not in endpoints:
+            endpoints.append(_ES_STAC_URL)
+        # Also accept an explicit fallback list from backend_config
+        for extra in cfg.get("stac_fallback_endpoints", []):
+            if extra not in endpoints:
+                endpoints.append(extra)
+
+        items = None
+        catalog_used = None
+        last_exc: Exception | None = None
+
+        for endpoint in endpoints:
+            catalog = self._open_catalog(endpoint)
+            try:
+                items = _retry(
+                    lambda cat=catalog: list(
+                        cat.search(
+                            collections=[collection],
+                            bbox=bbox,
+                            datetime=datetime_filter,
+                            query=query or None,
+                            limit=cfg.get("stac_limit", 100),
+                        ).items()
+                    ),
+                    label=f"search {collection}@{endpoint}",
+                )
+                catalog_used = endpoint
+                break
+            except Exception as exc:
+                last_exc = exc
+                log.warning(
+                    "STAC search failed on %s (%s): %s — trying next endpoint",
+                    endpoint, collection, exc,
+                )
+
         if not items:
+            if last_exc is not None and not _is_retryable(last_exc):
+                raise last_exc
             from aihydro_data.exceptions import SourceUnavailable
             raise SourceUnavailable(
                 code="STAC_NO_ITEMS",
                 message=(
                     f"No STAC items in {collection} for bbox={bbox}, "
-                    f"datetime={datetime_filter}."
+                    f"datetime={datetime_filter}. Tried: {endpoints}."
                 ),
                 recovery=(
                     "Widen the date range, check the geometry's coverage, or "
@@ -154,37 +230,43 @@ class Backend(SourceBackend):
                 docs_anchor="stac#no-items",
             )
 
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug("STAC: %d items from %s", len(items), catalog_used)
+
         import stackstac
         import math
 
         stack_epsg = cfg.get("stac_epsg", 4326)
 
-        # stackstac interprets `resolution` in the units of the output CRS.
-        # EPSG:4326 uses degrees, so 30 (metres) would mean 30° — an entire
-        # continent per pixel.  Convert metres → degrees using the bbox centre
-        # latitude so we get the expected ~30 m pixel size.
         if stack_epsg == 4326:
             bbox_centre_lat = (bbox[1] + bbox[3]) / 2
-            # 1 degree latitude ≈ 111 320 m; longitude shrinks by cos(lat).
-            # Use the larger of the two so pixels are never coarser than requested.
-            metres_per_deg = 111_320 * math.cos(math.radians(bbox_centre_lat))
-            metres_per_deg = max(metres_per_deg, 1.0)  # guard near poles
+            metres_per_deg = max(111_320 * math.cos(math.radians(bbox_centre_lat)), 1.0)
             stack_resolution = resolution / metres_per_deg
         else:
             stack_resolution = float(resolution)
 
-        cube = stackstac.stack(
-            items,
-            assets=[asset],
-            bounds_latlon=bbox,
-            resolution=stack_resolution,
-            epsg=stack_epsg,
-        )
-        # stackstac returns shape (time, band, y, x) — squeeze the band dim.
+        # Sign items if they came from Planetary Computer.
+        sign_items = items
+        if catalog_used == _PC_STAC_URL:
+            try:
+                import planetary_computer as pc
+                sign_items = [pc.sign(item) for item in items]
+            except ImportError:
+                pass  # unsigned — public assets still work for most collections
+
+        def _load():
+            return stackstac.stack(
+                sign_items,
+                assets=[asset],
+                bounds_latlon=bbox,
+                resolution=stack_resolution,
+                epsg=stack_epsg,
+            )
+
+        cube = _retry(_load, label=f"stackstac load {collection}")
+
         if "band" in cube.dims:
             cube = cube.isel(band=0, drop=True)
-        # For static products a singleton time dim is meaningless and breaks
-        # rioxarray's y/x detection (it expects exactly 2-D spatial arrays).
         if spec.timestep == "static" and "time" in cube.dims:
             cube = cube.isel(time=0, drop=True)
         if unit_conversion != 1.0:
@@ -241,21 +323,43 @@ class Backend(SourceBackend):
         catalog = self._open_catalog(endpoint)
         bbox = self._geometry_to_bbox(geometry)
 
-        search = catalog.search(
-            collections=[collection],
-            bbox=bbox,
-            datetime=f"{start}/{end}",
-            query=query or None,
-            limit=cfg.get("stac_limit", 200),
-        )
-        items = list(search.items())
+        # Build fallback endpoint chain for multiband composites too.
+        endpoints = [endpoint]
+        if endpoint == _PC_STAC_URL and _ES_STAC_URL not in endpoints:
+            endpoints.append(_ES_STAC_URL)
+
+        items = None
+        catalog_used = None
+        last_exc: Exception | None = None
+
+        for ep in endpoints:
+            cat = self._open_catalog(ep)
+            try:
+                items = _retry(
+                    lambda c=cat: list(
+                        c.search(
+                            collections=[collection],
+                            bbox=bbox,
+                            datetime=f"{start}/{end}",
+                            query=query or None,
+                            limit=cfg.get("stac_limit", 200),
+                        ).items()
+                    ),
+                    label=f"search {collection}@{ep}",
+                )
+                catalog_used = ep
+                break
+            except Exception as exc:
+                last_exc = exc
+                log.warning("STAC multiband search failed on %s: %s", ep, exc)
+
         if not items:
             from aihydro_data.exceptions import SourceUnavailable
             raise SourceUnavailable(
                 code="STAC_NO_ITEMS",
                 message=(
                     f"No STAC items in {collection} for bbox={bbox}, "
-                    f"datetime={start}/{end}."
+                    f"datetime={start}/{end}. Tried: {endpoints}."
                 ),
                 recovery="Widen the date range or relax the cloud-cover query.",
                 next_tools=["data_validate_request", "data_list_products"],
@@ -263,16 +367,14 @@ class Backend(SourceBackend):
             )
 
         # ── Auto-coarsen resolution to fit in RAM ─────────────────────────
-        # A safe in-memory median needs: n_scenes × n_pixels × n_bands × 4
-        # bytes.  Cap at 3 GB to leave headroom for the rest of the process.
         n_bands_total = len(band_map) + (1 if qa_asset and cloud_mask else 0)
         n_scenes = len(items)
-        _bbox_lon = bbox[2] - bbox[0]   # degrees
+        _bbox_lon = bbox[2] - bbox[0]
         _bbox_lat = bbox[3] - bbox[1]
         _bbox_centre_lat = (bbox[1] + bbox[3]) / 2
         _metres_per_deg = max(111_320 * math.cos(math.radians(_bbox_centre_lat)), 1.0)
         _area_m2 = (_bbox_lon * _metres_per_deg) * (_bbox_lat * 111_320)
-        _ram_budget = 3 * 1024 ** 3   # 3 GB
+        _ram_budget = 3 * 1024 ** 3
         _max_pixels = _ram_budget / (n_scenes * n_bands_total * 4)
         _min_scale_m = math.ceil(math.sqrt(_area_m2 / _max_pixels))
         if _min_scale_m > resolution:
@@ -289,24 +391,30 @@ class Backend(SourceBackend):
         if qa_asset and cloud_mask and qa_asset not in assets:
             assets = assets + [qa_asset]
 
-        # metres → degrees for EPSG:4326 (same convention as fetch_raster)
         bbox_centre_lat = (bbox[1] + bbox[3]) / 2
         metres_per_deg = max(111_320 * math.cos(math.radians(bbox_centre_lat)), 1.0)
         stack_resolution = resolution / metres_per_deg
 
+        # Sign if from PC.
+        sign_items = items
+        if catalog_used == _PC_STAC_URL:
+            try:
+                import planetary_computer as pc
+                sign_items = [pc.sign(item) for item in items]
+            except ImportError:
+                pass
+
         cube = stackstac.stack(
-            items,
+            sign_items,
             assets=assets,
             bounds_latlon=bbox,
             resolution=stack_resolution,
             epsg=4326,
-            chunksize=512,   # spatial chunks — keeps dask tasks manageable
-        )  # dims: (time, band, y, x); band coord = asset ids — lazy/dask-backed
+            chunksize=512,
+        )
 
-        # ── Per-pixel cloud masking before compositing ────────────────────
         if cloud_mask == "sentinel2_scl" and qa_asset:
             scl = cube.sel(band=qa_asset)
-            # Drop 3 shadow, 8/9 cloud, 10 cirrus, 11 snow.
             good = ~scl.isin([3, 8, 9, 10, 11])
             cube = cube.where(good)
         elif cloud_mask == "landsat_qapixel" and qa_asset:
@@ -322,12 +430,10 @@ class Backend(SourceBackend):
             )
             cube = cube.where(~bad)
 
-        # Median composite over time — lazy until .values is accessed downstream.
-        # Using skipna=True so masked (cloud-flagged) pixels don't corrupt the median.
         composite = cube.median(dim="time", skipna=True)
         ds = xr.Dataset()
-        for friendly, asset in band_map.items():
-            da = composite.sel(band=asset).drop_vars("band", errors="ignore")
+        for friendly, asset_id in band_map.items():
+            da = composite.sel(band=asset_id).drop_vars("band", errors="ignore")
             if scale_factor != 1.0 or offset != 0.0:
                 da = da * scale_factor + offset
             ds[friendly] = da
@@ -350,16 +456,18 @@ class Backend(SourceBackend):
             )
 
     def _open_catalog(self, url: str) -> Any:
+        """Open a STAC catalog, applying PC token-signing when available."""
         import pystac_client
-        try:
-            import planetary_computer as pc  # type: ignore
-            return pystac_client.Client.open(url, modifier=pc.sign_inplace)
-        except ImportError:
-            return pystac_client.Client.open(url)
+        if url == _PC_STAC_URL:
+            try:
+                import planetary_computer as pc
+                return pystac_client.Client.open(url, modifier=pc.sign_inplace)
+            except ImportError:
+                pass  # fall through to unsigned open
+        return pystac_client.Client.open(url)
 
     def _geometry_to_bbox(self, geometry: Any) -> list[float]:
         """Extract a [minx, miny, maxx, maxy] bbox from any geometry input."""
-        # GaugeID has no spatial extent
         if getattr(geometry, "geom_type", None) == "GaugeID":
             from aihydro_data.exceptions import GeometryInvalid
             raise GeometryInvalid(
@@ -373,7 +481,6 @@ class Backend(SourceBackend):
         if bounds is None:
             raise ValueError(f"Cannot derive bbox from {type(geometry).__name__}.")
         minx, miny, maxx, maxy = bounds
-        # For a point, expand to a tiny bbox so STAC returns ≥1 pixel
         if minx == maxx:
             minx -= 0.001
             maxx += 0.001

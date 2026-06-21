@@ -190,7 +190,7 @@ check = data_validate_request(
 
 ## Products
 
-49 products across 16 variables, live-tested against real backends (v0.2.0).
+54 products across 18 variables, live-tested against real backends (v0.2.0).
 
 ### Precipitation (6 products)
 
@@ -217,10 +217,11 @@ check = data_validate_request(
 | `OPEN_METEO_TMAX` | Direct API | Global | 25 km | Daily | **auth-free** centroid-based; Open-Meteo ERA5 archive |
 | `OPEN_METEO_TMIN` | Direct API | Global | 25 km | Daily | **auth-free** centroid-based; Open-Meteo ERA5 archive |
 
-### Evapotranspiration (6 products)
+### Evapotranspiration (7 products)
 
 | ID | Variable | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|---|
+| `OPENET_ENSEMBLE` | ET (actual) | GEE | CONUS | 30 m | Monthly | OpenET ensemble; field-validated; 2016–present |
 | `MOD16_ET` | ET (actual) | GEE | Global | 500 m | 8-day → monthly | GEE auth required |
 | `TERRACLIMATE_AET` | ET (actual) | GEE | Global | 4.6 km | Monthly | GEE auth required |
 | `MOD16_PET` | PET | GEE | Global | 500 m | 8-day → monthly | GEE auth required |
@@ -228,7 +229,7 @@ check = data_validate_request(
 | `GRIDMET_PET` | PET | HyRiver | CONUS | 4 km | Daily | auth-free |
 | `OPEN_METEO_PET` | PET | Direct API | Global | 25 km | Daily | **auth-free** centroid-based |
 
-### DEM (5 products)
+### DEM (6 products)
 
 | ID | Source | Coverage | Resolution | Notes |
 |---|---|---|---|---|
@@ -236,7 +237,8 @@ check = data_validate_request(
 | `SRTM` | GEE | 60°S–60°N | 30 m | NASA SRTM v3; GEE auth required |
 | `MERIT_DEM` | GEE | Global | 90 m | Hydrologically conditioned; GEE auth required |
 | `DEM3DEP_10M` | HyRiver | CONUS | 10 m | USGS 3DEP; highest CONUS resolution; auth-free |
-| `GLO30_STAC` | STAC | Global | 30 m | **auth-free** Copernicus GLO-30 via Planetary Computer |
+| `GLO30_STAC` | STAC | Global | 30 m | **auth-free** Copernicus GLO-30 via Planetary Computer; auto-falls-back to Element84 on timeout |
+| `GLO30_ELEMENT84` | STAC | Global | 30 m | **auth-free** Copernicus GLO-30 via Element84 Earth Search (AWS); independent infrastructure |
 
 ### Soil Moisture (1 product)
 
@@ -253,12 +255,20 @@ check = data_validate_request(
 | `DYNAMIC_WORLD` | GEE | Global | 10 m; Sentinel-2 derived; GEE auth required |
 | `ESA_WORLDCOVER_STAC` | STAC | Global | 10 m; **auth-free** via Planetary Computer |
 
-### Soil Properties (2 products)
+### Soil Properties (3 products)
 
 | ID | Source | Coverage | Notes |
 |---|---|---|---|
 | `POLARIS` | HyRiver | CONUS | 30 m; 9 properties |
 | `SOILGRIDS` | GEE | Global | 250 m; ISRIC |
+| `OPENLANDMAP_BEDROCK` | GEE | Global | 250 m; depth to bedrock (USDA-Simard); GEE auth required |
+
+### Impervious Surface (2 products)
+
+| ID | Source | Coverage | Resolution | Notes |
+|---|---|---|---|---|
+| `NLCD_IMPERVIOUS` | HyRiver | CONUS | 30 m | NLCD 2021 impervious surface fraction; auth-free |
+| `GHSL_BUILT_UP` | GEE | Global | 100 m | JRC Global Human Settlement Layer built-up surface; GEE auth required |
 
 ### Vegetation (3 products)
 
@@ -522,7 +532,7 @@ Every success carries `citation`, `bibtex`, `units`, `license`, and `next_steps`
 # Offline suite (no network, no auth — ~7 seconds)
 pytest -m "not live"
 
-# Live sweep — tests all 49 products against real backends (~15 minutes)
+# Live sweep — tests all 54 products against real backends (~15 minutes)
 # Requires GEE auth + internet
 pytest tests/test_live_sweep.py -v
 ```
@@ -531,7 +541,9 @@ pytest tests/test_live_sweep.py -v
 
 ## Status
 
-**v0.2.0** — First public PyPI release. 49 products across 16 variables; global streamflow tri-source chain (GEOGLOWS/Open-Meteo/GloFAS); spatial-support honesty (point vs areal vs reach products declared and enforced); verify-on-read cache; `region` and `outlet` kwargs; structural refactor (gee/ package, MCP `@_tool_envelope`); 341 offline tests.
+**v0.2.1** — STAC robustness: retry+backoff in STAC backend; `GLO30_ELEMENT84` (Element84 Earth Search fallback for Copernicus DEM); impervious + bedrock_depth variables added. 54 products across 18 variables; 369 offline tests.
+
+**v0.2.0** — First public PyPI release. Global streamflow tri-source chain (GEOGLOWS/Open-Meteo/GloFAS); spatial-support honesty (point vs areal vs reach products declared and enforced); verify-on-read cache; `region` and `outlet` kwargs; structural refactor (gee/ package, MCP `@_tool_envelope`); 341 offline tests.
 
 See **[examples/cookbook.ipynb](examples/cookbook.ipynb)** for working recipes.
 

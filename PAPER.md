@@ -26,8 +26,8 @@ of an input geometry, (ii) resolves an ordered, region-specific list of candidat
 products from a pure policy table, (iii) walks that fallback chain until one
 backend succeeds, and (iv) returns a provenance-rich result envelope carrying
 the served product, license, citation, decision trail, and machine-readable
-next-step hints. The current release registers **49 products across 16 variables
-and 8 backends**, of which **21 are auth-free** and **38 offer global coverage**.
+next-step hints. The current release registers **54 products across 18 variables
+and 8 backends**, of which **23 are auth-free** and **41 offer global coverage**.
 A headline contribution is the **global streamflow tri-source chain** —
 GEOGLOWS v2 retrospective (1940–present, TDX-Hydro reach network, anonymous AWS
 Open Data Zarr), Open-Meteo river discharge model, and GloFAS v4 (Copernicus CDS)
@@ -275,12 +275,13 @@ GeoDataFrame, GeoJSON dict, shapely geometry, `(lat,lon)`, bbox, WKT, and a
 ## 4. Implementation Summary (current release)
 
 - **Version:** 0.2.0 (first public PyPI release: `pip install aihydro-data`)
-- **Products:** 49 across 16 variables — precipitation (6), tmax (4), tmin (4),
-  tmean (1), pet (4), et (2), dem (5), landcover (4), soil (2), soil_moisture (1),
-  ndvi (2), lai (1), optical (5), streamflow (4), flood_inundation (1), geology (3).
-- **Backends:** gee (23), hyriver (10), direct_api (5), stac (4), geoglows_retro (1),
+- **Products:** 54 across 18 variables — precipitation (6), tmax (4), tmin (4),
+  tmean (1), pet (4), et (3), dem (6), landcover (4), soil (3), soil_moisture (1),
+  ndvi (2), lai (1), optical (5), streamflow (4), flood_inundation (1), geology (3),
+  impervious (2), bedrock_depth (1).
+- **Backends:** gee (23), hyriver (10), direct_api (5), stac (5), geoglows_retro (1),
   openmeteo_flood (1), cds_glofas (1), pygeoglim (3).
-- **Auth-free products:** 21 of 49. **Global-coverage products:** 38 of 49.
+- **Auth-free products:** 23 of 54. **Global-coverage products:** 41 of 54.
 - **Public API:** `fetch`, `list_products`, `get_product` + 9 MCP tools
   (`data_fetch`, `data_batch_fetch`, `data_list_products`, `data_describe_product`,
   `data_validate_request`, `data_get_cache_status`, `data_invalidate_cache`,

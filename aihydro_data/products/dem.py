@@ -199,6 +199,7 @@ PRODUCTS: list[ProductSpec] = [
 
     # Auth-free alternative to GLO30 via Planetary Computer STAC. Same dataset
     # (Copernicus DEM GLO-30) but served as COG, accessible without GEE.
+    # The STAC backend automatically falls back to Element84 on PC timeout.
     ProductSpec(
         id="GLO30_STAC",
         variable="dem",
@@ -229,7 +230,8 @@ PRODUCTS: list[ProductSpec] = [
         requires_extras=["stac"],
         requires_auth=[],
         common_pitfalls=[
-            "Auth-free alternative to GLO30 (GEE) — same data, no Earth Engine needed.",
+            "Primary endpoint is Planetary Computer; backend auto-falls-back to "
+            "Element84 Earth Search on timeout.",
             "COG-backed: pulls only the tiles intersecting your geometry.",
             "Requires `pip install aihydro-data[stac]`.",
         ],
@@ -239,6 +241,60 @@ PRODUCTS: list[ProductSpec] = [
         next_steps=_DEM_NEXT_STEPS,
         backend_config={
             "stac_endpoint": "https://planetarycomputer.microsoft.com/api/stac/v1",
+            "stac_collection": "cop-dem-glo-30",
+            "stac_asset": "data",
+            "stac_resolution": 30,
+            "static": True,
+            # Explicit fallback list — stac.py also injects Element84 automatically
+            # when primary == PC, but listing it here is self-documenting.
+            "stac_fallback_endpoints": [
+                "https://earth-search.aws.element84.com/v1",
+            ],
+        },
+    ),
+
+    # Same Copernicus DEM GLO-30 data, served via Element84 Earth Search (AWS).
+    # Completely independent infrastructure from Planetary Computer — useful when
+    # PC times out and as an explicit manual override.
+    ProductSpec(
+        id="GLO30_ELEMENT84",
+        variable="dem",
+        source="stac",
+        source_dataset_id="cop-dem-glo-30",
+        coverage=["global"],
+        temporal_start="",
+        temporal_end="",
+        resolution_m=30,
+        timestep="static",
+        units="m",
+        license="ESA Copernicus License (free, attribution required)",
+        citation=(
+            "European Space Agency (2021). Copernicus Global Digital Elevation Model. "
+            "Distributed via Element84 Earth Search (AWS). "
+            "https://doi.org/10.5270/ESA-c5d3d65"
+        ),
+        bibtex=(
+            "@dataset{esa2021copdem_es,\n"
+            "  author    = {{European Space Agency}},\n"
+            "  title     = {Copernicus Global Digital Elevation Model},\n"
+            "  publisher = {Element84 Earth Search},\n"
+            "  year      = {2021},\n"
+            "  doi       = {10.5270/ESA-c5d3d65}\n"
+            "}"
+        ),
+        homepage="https://earth-search.aws.element84.com/v1/collections/cop-dem-glo-30",
+        requires_extras=["stac"],
+        requires_auth=[],
+        common_pitfalls=[
+            "Independent infrastructure from Planetary Computer — use when PC is down.",
+            "No token signing required; assets are public AWS S3 COGs.",
+        ],
+        examples=[
+            "fetch('dem', gdf, '', '', mode='manual', product='GLO30_ELEMENT84')",
+        ],
+        next_steps=_DEM_NEXT_STEPS,
+        backend_config={
+            "stac_endpoint": "https://earth-search.aws.element84.com/v1",
             "stac_collection": "cop-dem-glo-30",
             "stac_asset": "data",
             "stac_resolution": 30,
