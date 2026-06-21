@@ -37,7 +37,7 @@ CoverageTag = Literal[
 # Backend identifiers. Each one corresponds to a module in sources/.
 SourceId = Literal[
     "gee", "stac", "hyriver", "direct_api", "local_cache",
-    "cds_glofas", "geoglows_retro", "openmeteo_flood",
+    "cds_glofas", "geoglows_retro", "openmeteo_flood", "pygeoglim",
 ]
 
 # Aggregation modes a user can request.

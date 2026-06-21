@@ -113,6 +113,13 @@ PRODUCT_POLICY: dict[tuple[str, str], list[str]] = {
     ("flood_inundation", "global"):     ["GFM_S1_INUNDATION"],
     ("flood_inundation", "CONUS"):      ["GFM_S1_INUNDATION"],
 
+    # ── Geology (lithology + hydrogeology) ───────────────────────────────
+    # PYGEOGLIM_ALL returns both GLiM + GLHYMPS attributes in one call.
+    # GLIM_TILES / GLHYMPS_TILES can be pinned manually for selective access.
+    # Public-release gate enforced by pygeoglim tile manifest (CCGM pending).
+    ("geology", "CONUS"):   ["PYGEOGLIM_ALL"],
+    ("geology", "global"):  ["PYGEOGLIM_ALL"],
+
     # ── Optical surface reflectance (multi-band composites) ───────────────
     # Raw bands for local spectral-index computation (NDWI, MNDWI, NBR, …).
     # Sentinel-2 is primary (10 m); Landsat 9/8 fall back at 30 m with longer

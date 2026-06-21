@@ -84,6 +84,13 @@ _VARIABLE_ALIASES: dict[str, str] = {
     "inundation":           "flood_inundation",
     "observed_flood":       "flood_inundation",
     "gfm":                  "flood_inundation",
+    # Geology
+    "lithology":            "geology",
+    "hydrogeology":         "geology",
+    "permeability":         "geology",
+    "porosity":             "geology",
+    "glim":                 "geology",
+    "glhymps":              "geology",
 }
 
 

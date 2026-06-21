@@ -74,8 +74,9 @@ def test_all_product_ids_present_in_readme(registry, readme_text):
 def test_paper_product_count(registry, paper_text):
     """PAPER.md Section 4 must state the correct total product count."""
     total = len(registry)
-    matches = re.findall(r"(\d+) across 14 variables", paper_text)
-    assert matches, "PAPER.md must contain 'N across 14 variables' in Section 4"
+    var_count = len({p.variable for p in registry.values()})
+    matches = re.findall(rf"(\d+) across {var_count} variables", paper_text)
+    assert matches, f"PAPER.md must contain 'N across {var_count} variables' in Section 4"
     for count_str in matches:
         assert int(count_str) == total, (
             f"PAPER.md says '{count_str}' products but registry has {total}."

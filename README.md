@@ -32,7 +32,7 @@ result.next_steps        # agent-facing hints: what to do with this data
 - [Why](#why)
 - [Install](#install)
 - [Quick Start](#quick-start)
-- [Products (45 total)](#products)
+- [Products (49 total)](#products)
 - [Routing System](#routing-system)
 - [Auth Setup](#auth-setup)
 - [MCP Tools](#mcp-tools)
@@ -190,7 +190,7 @@ check = data_validate_request(
 
 ## Products
 
-45 products across 14 variables, live-tested against real backends (v0.2.0).
+49 products across 16 variables, live-tested against real backends (v0.2.0).
 
 ### Precipitation (6 products)
 
@@ -277,6 +277,39 @@ check = data_validate_request(
 | `LANDSAT8_SR` | GEE | Global | 30 m | Landsat 8 L2 SR; GEE auth required |
 | `SENTINEL2_SR_STAC` | STAC | Global | 10 m | **auth-free** via Planetary Computer |
 | `LANDSAT_SR_STAC` | STAC | Global | 30 m | **auth-free** Landsat C2 L2 via Planetary Computer |
+
+### Geology (3 products)
+
+Area-weighted lithology and hydrogeology attributes from GLiM and GLHYMPS, returned as a
+single-row DataFrame. `result.data.iloc[0].to_dict()` gives all 9 CAMELS-geology attributes.
+
+> **License gate:** GLiM redistribution requires CCGM written permission. Tiles are available
+> for private research via `PYGEOGLIM_HF_TOKEN`. Public release is fails-closed pending permission.
+
+| ID | Source | Coverage | Notes |
+|---|---|---|---|
+| `PYGEOGLIM_ALL` | pygeoglim | Global | **Default.** Combined GLiM + GLHYMPS → 9 attributes: 5 lithology + 4 hydrogeology |
+| `GLIM_TILES` | pygeoglim | Global | GLiM lithology only: `geol_1st_class`, `glim_1st_class_frac`, `geol_2nd_class`, `glim_2nd_class_frac`, `carbonate_rocks_frac` |
+| `GLHYMPS_TILES` | pygeoglim | Global | GLHYMPS hydrogeology only: `geol_porosity`, `geol_permeability` (log₁₀ m²), `geol_permeability_linear`, `hydraulic_conductivity` |
+
+```python
+# All geology attributes in one call
+result = fetch("geology", watershed_gdf, "2020-01-01", "2020-12-31")
+attrs = result.data.iloc[0].to_dict()
+# → {'geol_1st_class': 'Siliciclastic...', 'carbonate_rocks_frac': 0.18,
+#    'geol_porosity': 0.099, 'geol_permeability': -11.1, ...}
+
+# Aliases also work
+fetch("lithology", ...)     # → geology
+fetch("hydrogeology", ...)  # → geology
+fetch("permeability", ...)  # → geology
+```
+
+### Flood Inundation (1 product)
+
+| ID | Source | Coverage | Notes |
+|---|---|---|---|
+| `GFM_S1_INUNDATION` | Direct API | Global | Copernicus GFM SAR-derived flood extent; event-based, not operational forecast |
 
 ### Streamflow (4 products)
 
@@ -489,7 +522,7 @@ Every success carries `citation`, `bibtex`, `units`, `license`, and `next_steps`
 # Offline suite (no network, no auth — ~7 seconds)
 pytest -m "not live"
 
-# Live sweep — tests all 45 products against real backends (~15 minutes)
+# Live sweep — tests all 49 products against real backends (~15 minutes)
 # Requires GEE auth + internet
 pytest tests/test_live_sweep.py -v
 ```
@@ -498,7 +531,7 @@ pytest tests/test_live_sweep.py -v
 
 ## Status
 
-**v0.2.0** — First public PyPI release. 45 products across 14 variables; global streamflow tri-source chain (GEOGLOWS/Open-Meteo/GloFAS); spatial-support honesty (point vs areal vs reach products declared and enforced); verify-on-read cache; `region` and `outlet` kwargs; structural refactor (gee/ package, MCP `@_tool_envelope`); 341 offline tests.
+**v0.2.0** — First public PyPI release. 49 products across 16 variables; global streamflow tri-source chain (GEOGLOWS/Open-Meteo/GloFAS); spatial-support honesty (point vs areal vs reach products declared and enforced); verify-on-read cache; `region` and `outlet` kwargs; structural refactor (gee/ package, MCP `@_tool_envelope`); 341 offline tests.
 
 See **[examples/cookbook.ipynb](examples/cookbook.ipynb)** for working recipes.
 
