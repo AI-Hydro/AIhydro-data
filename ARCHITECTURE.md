@@ -337,6 +337,34 @@ The manifest's `serving_product` is checked against `allowed_products` before re
 
 ---
 
+## Geology product (Wave B4)
+
+`products/geology.py` declares three `ProductSpec` entries that wrap pygeoglim:
+
+```
+PYGEOGLIM_ALL   — auto-routes CONUS→CONUS gpkg, global→HF shards (pygeoglim 1.4.0+)
+GLIM_TILES      — GLiM-only variable alias
+GLHYMPS_TILES   — GLHYMPS-only variable alias
+```
+
+The backend in `sources/pygeoglim.py` calls:
+```python
+glim   = pygeoglim.glim_attributes(gdf,    region="auto")
+glhymp = pygeoglim.glhymps_attributes(gdf, region="auto")
+```
+and returns a single-row `pd.DataFrame` with all 9 CAMELS geology attrs.
+
+Since pygeoglim 1.4.0 has `CCGM_PERMISSION_GRANTED = True`, the global shard
+path (`region="global"`) is now open — any watershed on Earth gets geology attrs
+as soon as the global tile files are built and uploaded to HuggingFace.
+
+```
+fetch("geology", amazon_gdf, "1990-01-01", "2020-12-31")
+  → PYGEOGLIM_ALL → region="global" → HF shards → 9-attr DataFrame
+```
+
+---
+
 ## Adding a new product: checklist
 
 1. **Add `ProductSpec`** to `products/<variable>.py` (create the file if new variable).

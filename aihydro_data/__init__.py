@@ -54,6 +54,7 @@ from aihydro_data.contracts import (
 __all__ = [
     "__version__",
     "fetch",
+    "fetch_raster",
     "fetch_batch",
     "list_products",
     "get_product",
@@ -118,6 +119,24 @@ def fetch(*args, **kwargs):
     """Lazy proxy to aihydro_data._pipeline.fetch — see that function's docstring."""
     from aihydro_data._pipeline import fetch as _fetch
     return _fetch(*args, **kwargs)
+
+
+def fetch_raster(variable, geometry, start="", end="", *, mode="auto", product=None, region=None):
+    """Fetch a raw raster (xr.DataArray) via the full routing chain.
+
+    Convenience wrapper over fetch(..., aggregation='raw_raster') for callers
+    that need the spatial DataArray directly — e.g. aihydro-watershed's DEM
+    pipeline — without having to unpack a FetchResult.
+
+    Returns the xr.DataArray from result.data.  The full provider fallback
+    chain, retry/backoff, and disk cache behave identically to fetch().
+    """
+    result = fetch(
+        variable, geometry, start, end,
+        mode=mode, product=product, region=region,
+        aggregation="raw_raster",
+    )
+    return result.data
 
 
 def fetch_batch(*args, **kwargs):
