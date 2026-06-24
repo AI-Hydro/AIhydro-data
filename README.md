@@ -561,6 +561,26 @@ See **[examples/cookbook.ipynb](examples/cookbook.ipynb)** for working recipes.
 
 ---
 
+
+---
+
+## Citation
+
+If you use `aihydro-data` in your research, please cite it:
+
+```bibtex
+@software{galib2025aihydrodata,
+  author    = {Galib, Mohammad},
+  title     = {aihydro-data: Global Hydrology Dataverse for the AI-Hydro Platform},
+  year      = {2025},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.20823443},
+  url       = {https://doi.org/10.5281/zenodo.20823443}
+}
+```
+
+---
+
 ## License
 
 Apache-2.0. Data products carry their own licenses — always check `result.license` or `data_describe_product(id)`.
