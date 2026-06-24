@@ -24,6 +24,7 @@ result.next_steps        # agent-facing hints: what to do with this data
 [![PyPI](https://img.shields.io/pypi/v/aihydro-data)](https://pypi.org/project/aihydro-data/)
 [![Python](https://img.shields.io/pypi/pyversions/aihydro-data)](https://pypi.org/project/aihydro-data/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20823443.svg)](https://doi.org/10.5281/zenodo.20823443)
 
 ---
 
