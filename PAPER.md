@@ -274,7 +274,7 @@ GeoDataFrame, GeoJSON dict, shapely geometry, `(lat,lon)`, bbox, WKT, and a
 
 ## 4. Implementation Summary (current release)
 
-- **Version:** 0.2.0 (first public PyPI release: `pip install aihydro-data`)
+- **Version:** 0.2.1 (metadata repair release; first public PyPI feature release was 0.2.0)
 - **Products:** 54 across 18 variables — precipitation (6), tmax (4), tmin (4),
   tmean (1), pet (4), et (3), dem (6), landcover (4), soil (3), soil_moisture (1),
   ndvi (2), lai (1), optical (5), streamflow (4), flood_inundation (1), geology (3),

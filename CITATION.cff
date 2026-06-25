@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: "aihydro-data: Global Hydrology Dataverse — Multi-Source Region-Aware Fetch"
-version: "0.2.0"
+version: "0.2.1"
 date-released: "2026-06-13"
 license: Apache-2.0
 repository-code: "https://github.com/AI-Hydro/aihydro-data"
@@ -34,7 +34,7 @@ preferred-citation:
       given-names: Mohammad
       affiliation: "Purdue University"
       email: mgalib@purdue.edu
-  version: "0.2.0"
+  version: "0.2.1"
   date-released: "2026-06-13"
   license: Apache-2.0
   repository-code: "https://github.com/AI-Hydro/aihydro-data"

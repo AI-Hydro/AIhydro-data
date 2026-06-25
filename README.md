@@ -542,7 +542,7 @@ pytest tests/test_live_sweep.py -v
 
 ## Status
 
-**v0.2.1** — STAC robustness: retry+backoff in STAC backend; `GLO30_ELEMENT84` (Element84 Earth Search fallback for Copernicus DEM); impervious + bedrock_depth variables added. 54 products across 18 variables; 369 offline tests.
+**v0.2.1** — STAC robustness + metadata repair: retry+backoff in STAC backend; `GLO30_ELEMENT84`; impervious + bedrock_depth variables; and corrected `aihydro-core` dependency metadata so downstream `aihydro-watershed`/`aihydro-tools` resolve with `aihydro-core>=0.2`. 54 products across 18 variables; 369 offline tests.
 
 **v0.2.0** — First public PyPI release. Global streamflow tri-source chain (GEOGLOWS/Open-Meteo/GloFAS); spatial-support honesty (point vs areal vs reach products declared and enforced); verify-on-read cache; `region` and `outlet` kwargs; structural refactor (gee/ package, MCP `@_tool_envelope`); 341 offline tests.
 

@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.2.1] — 2026-06-25
+
+### Fixed
+
+- Metadata-only compatibility release: the source tree already allows `aihydro-core>=0.1.0,<0.3`, but the published 0.2.0 wheel advertised the stale bound `aihydro-core<0.2`. This blocked normal dependency resolution with `aihydro-watershed>=0.1.0`, which requires the `aihydro-core[contracts]>=0.2.0` result contract. v0.2.1 republishes the corrected dependency metadata.
+
+---
+
 ## [0.1.6] — 2026-05-26
 
 ### Added — `fetch()` auto-batch dispatch
