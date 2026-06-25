@@ -1,0 +1,40 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "aihydro-data: Global Hydrology Dataverse — Multi-Source Region-Aware Fetch"
+version: "0.2.0"
+date-released: "2026-06-13"
+license: Apache-2.0
+repository-code: "https://github.com/AI-Hydro/aihydro-data"
+abstract: >
+  aihydro-data is a variable-centric, multi-source, region-aware hydrology data
+  library. A single fetch(variable, geometry, start, end) call routes across
+  45 products spanning 14 variables — streamflow (NWIS, GRDC, GloFAS),
+  precipitation (IMERG, ERA5, CHIRPS), evapotranspiration, land cover, soil,
+  DEM, and more — with citation metadata and fallback histories on every result.
+authors:
+  - family-names: Galib
+    given-names: Mohammad
+    affiliation: "Purdue University"
+    email: mgalib@purdue.edu
+keywords:
+  - hydrology
+  - streamflow
+  - remote-sensing
+  - GEE
+  - STAC
+  - HyRiver
+  - CAMELS
+  - FAIR
+  - data-access
+preferred-citation:
+  type: software
+  title: "aihydro-data: Global Hydrology Dataverse — Multi-Source Region-Aware Fetch"
+  authors:
+    - family-names: Galib
+      given-names: Mohammad
+      affiliation: "Purdue University"
+      email: mgalib@purdue.edu
+  version: "0.2.0"
+  date-released: "2026-06-13"
+  license: Apache-2.0
+  repository-code: "https://github.com/AI-Hydro/aihydro-data"
