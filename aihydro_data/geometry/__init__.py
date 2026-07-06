@@ -108,6 +108,19 @@ def coerce_geometry(geom: Any) -> Any:
     if isinstance(geom, GaugeID):
         return geom
 
+    if isinstance(geom, dict) and {"lat", "lon"}.issubset(geom):
+        lat = geom["lat"]
+        lon = geom["lon"]
+        if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+            return _Point(lon, lat)
+        raise GeometryInvalid(
+            code="GEOMETRY_INVALID_LAT_LON",
+            message="lat/lon geometry dict must contain numeric 'lat' and 'lon' values.",
+            recovery="Pass {'lat': 45.175, 'lon': -69.3147}, [lat, lon], or a GeoJSON Point.",
+            next_tools=["data_help"],
+            docs_anchor="first_fetch",
+        )
+
     if isinstance(geom, dict) and "type" in geom:
         try:
             if geom["type"] == "FeatureCollection":
