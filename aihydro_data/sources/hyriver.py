@@ -364,7 +364,14 @@ class Backend(SourceBackend):
             # default if the date can't be parsed.
             year = _nearest_nlcd_year(start, default=cfg.get("default_year", 2019))
             gdf = gpd.GeoDataFrame(geometry=[geometry], crs="EPSG:4326")
-            ds = gh.nlcd_bygeom(gdf, years={"cover": [year]}, resolution=cfg.get("resolution_m", 30))
+            # Honour the product's NLCD layer selector. Without this, every NLCD
+            # product (impervious, canopy) silently returned the land-COVER layer
+            # (discrete class codes), NOT its own continuous 0–100 % raster —
+            # nlcd_bygeom keys the returned band by layer ("impervious_2019" etc.),
+            # so a hardcoded {"cover": ...} meant NLCD_IMPERVIOUS / NLCD_CANOPY were
+            # unusable. Valid layers: "cover" | "impervious" | "canopy" | "descriptor".
+            layer = cfg.get("nlcd_layer", "cover")
+            ds = gh.nlcd_bygeom(gdf, years={layer: [year]}, resolution=cfg.get("resolution_m", 30))
             # nlcd_bygeom keyed by GeoDataFrame index → unwrap to a single Dataset.
             if isinstance(ds, dict):
                 ds = next(iter(ds.values()))
