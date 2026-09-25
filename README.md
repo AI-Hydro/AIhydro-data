@@ -191,147 +191,159 @@ check = data_validate_request(
 
 ## Products
 
-54 products across 18 variables, live-tested against real backends (v0.2.0).
+57 products across 19 variables (v0.2.0).
 
 ### Precipitation (6 products)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `CHIRPS` | GEE | Global | 5 km | Daily | Primary global; GEE auth required |
-| `IMERG_PRECIP` | GEE | Global | 11 km | Daily | NASA GPM V07; GEE auth required |
-| `ERA5L_PRECIP` | GEE | Global | 11 km | Daily | Reanalysis; 1950–present |
-| `GRIDMET_PRECIP` | HyRiver | CONUS | 4 km | Daily | Primary CONUS; no auth |
-| `DAYMET_PRECIP` | HyRiver | N. America | 1 km | Daily | High-res; no auth |
-| `CHIRPS_IRI` | Direct API | Global | 5 km | Daily | **Auth-free fallback** via IRI OPeNDAP |
+| `CHIRPS` | gee | global | 5 km | daily | GEE auth required |
+| `IMERG_PRECIP` | gee | global | 11 km | daily | GEE auth required |
+| `ERA5L_PRECIP` | gee | global | 11 km | daily | GEE auth required |
+| `GRIDMET_PRECIP` | hyriver | CONUS | 4 km | daily | auth-free |
+| `DAYMET_PRECIP` | hyriver | NORTH_AMERICA | 1 km | daily | auth-free |
+| `CHIRPS_IRI` | direct_api | global | 5 km | daily | auth-free |
 
-### Temperature (9 products)
+### Temperature — Tmax (4 products)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `ERA5L_TMAX` | GEE | Global | 11 km | Daily | GEE auth required |
-| `ERA5L_TMIN` | GEE | Global | 11 km | Daily | GEE auth required |
-| `ERA5L_TMEAN` | GEE | Global | 11 km | Daily | GEE auth required |
-| `GRIDMET_TMAX` | HyRiver | CONUS | 4 km | Daily | auth-free |
-| `GRIDMET_TMIN` | HyRiver | CONUS | 4 km | Daily | auth-free |
-| `DAYMET_TMAX` | HyRiver | N. America | 1 km | Daily | auth-free |
-| `DAYMET_TMIN` | HyRiver | N. America | 1 km | Daily | auth-free |
-| `OPEN_METEO_TMAX` | Direct API | Global | 25 km | Daily | **auth-free** centroid-based; Open-Meteo ERA5 archive |
-| `OPEN_METEO_TMIN` | Direct API | Global | 25 km | Daily | **auth-free** centroid-based; Open-Meteo ERA5 archive |
+| `GRIDMET_TMAX` | hyriver | CONUS | 4 km | daily | auth-free |
+| `DAYMET_TMAX` | hyriver | NORTH_AMERICA | 1 km | daily | auth-free |
+| `ERA5L_TMAX` | gee | global | 11 km | daily | GEE auth required |
+| `OPEN_METEO_TMAX` | direct_api | global | 25 km | daily | auth-free; spatial support: point |
 
-### Evapotranspiration (7 products)
+### Temperature — Tmin (4 products)
 
-| ID | Variable | Source | Coverage | Resolution | Timestep | Notes |
-|---|---|---|---|---|---|---|
-| `OPENET_ENSEMBLE` | ET (actual) | GEE | CONUS | 30 m | Monthly | OpenET ensemble; field-validated; 2016–present |
-| `MOD16_ET` | ET (actual) | GEE | Global | 500 m | 8-day → monthly | GEE auth required |
-| `TERRACLIMATE_AET` | ET (actual) | GEE | Global | 4.6 km | Monthly | GEE auth required |
-| `MOD16_PET` | PET | GEE | Global | 500 m | 8-day → monthly | GEE auth required |
-| `ERA5L_PET` | PET | GEE | Global | 11 km | Daily | GEE auth required |
-| `GRIDMET_PET` | PET | HyRiver | CONUS | 4 km | Daily | auth-free |
-| `OPEN_METEO_PET` | PET | Direct API | Global | 25 km | Daily | **auth-free** centroid-based |
+| ID | Source | Coverage | Resolution | Timestep | Notes |
+|---|---|---|---|---|---|
+| `GRIDMET_TMIN` | hyriver | CONUS | 4 km | daily | auth-free |
+| `DAYMET_TMIN` | hyriver | NORTH_AMERICA | 1 km | daily | auth-free |
+| `ERA5L_TMIN` | gee | global | 11 km | daily | GEE auth required |
+| `OPEN_METEO_TMIN` | direct_api | global | 25 km | daily | auth-free; spatial support: point |
+
+### Temperature — Tmean (1 product)
+
+| ID | Source | Coverage | Resolution | Timestep | Notes |
+|---|---|---|---|---|---|
+| `ERA5L_TMEAN` | gee | global | 11 km | daily | GEE auth required |
+
+### Potential Evapotranspiration (PET) (4 products)
+
+| ID | Source | Coverage | Resolution | Timestep | Notes |
+|---|---|---|---|---|---|
+| `MOD16_PET` | gee | global | 500 m | monthly | GEE auth required |
+| `ERA5L_PET` | gee | global | 11 km | daily | GEE auth required |
+| `GRIDMET_PET` | hyriver | CONUS | 4 km | daily | auth-free |
+| `OPEN_METEO_PET` | direct_api | global | 25 km | daily | auth-free; spatial support: point |
+
+### Actual Evapotranspiration (ET) (3 products)
+
+| ID | Source | Coverage | Resolution | Timestep | Notes |
+|---|---|---|---|---|---|
+| `MOD16_ET` | gee | global | 500 m | monthly | GEE auth required |
+| `TERRACLIMATE_AET` | gee | global | 4 km | monthly | GEE auth required |
+| `OPENET_ENSEMBLE` | gee | CONUS | 30 m | monthly | GEE auth required |
 
 ### DEM (6 products)
 
-| ID | Source | Coverage | Resolution | Notes |
-|---|---|---|---|---|
-| `GLO30` | GEE | Global | 30 m | Copernicus; primary global DEM; GEE auth required |
-| `SRTM` | GEE | 60°S–60°N | 30 m | NASA SRTM v3; GEE auth required |
-| `MERIT_DEM` | GEE | Global | 90 m | Hydrologically conditioned; GEE auth required |
-| `DEM3DEP_10M` | HyRiver | CONUS | 10 m | USGS 3DEP; highest CONUS resolution; auth-free |
-| `GLO30_STAC` | STAC | Global | 30 m | **auth-free** Copernicus GLO-30 via Planetary Computer; auto-falls-back to Element84 on timeout |
-| `GLO30_ELEMENT84` | STAC | Global | 30 m | **auth-free** Copernicus GLO-30 via Element84 Earth Search (AWS); independent infrastructure |
+| ID | Source | Coverage | Resolution | Timestep | Notes |
+|---|---|---|---|---|---|
+| `GLO30` | gee | global | 30 m | static | GEE auth required |
+| `SRTM` | gee | global | 30 m | static | GEE auth required |
+| `DEM3DEP_10M` | hyriver | CONUS | 10 m | static | auth-free |
+| `MERIT_DEM` | gee | global | 90 m | static | GEE auth required |
+| `GLO30_STAC` | stac | global | 30 m | static | auth-free |
+| `GLO30_ELEMENT84` | stac | global | 30 m | static | auth-free |
 
 ### Soil Moisture (1 product)
 
-| ID | Source | Coverage | Resolution | Timestep |
-|---|---|---|---|---|
-| `SMAP_SM` | GEE | Global | 9 km | Daily (2015–present) |
+| ID | Source | Coverage | Resolution | Timestep | Notes |
+|---|---|---|---|---|---|
+| `SMAP_SM` | gee | global | 9 km | daily | GEE auth required |
 
 ### Land Cover (4 products)
 
-| ID | Source | Coverage | Notes |
-|---|---|---|---|
-| `NLCD` | HyRiver | CONUS | NLCD 2021; 30 m; auth-free |
-| `ESA_WORLDCOVER` | GEE | Global | 10 m; 2020 & 2021; GEE auth required |
-| `DYNAMIC_WORLD` | GEE | Global | 10 m; Sentinel-2 derived; GEE auth required |
-| `ESA_WORLDCOVER_STAC` | STAC | Global | 10 m; **auth-free** via Planetary Computer |
-
-### Soil Properties (3 products)
-
-| ID | Source | Coverage | Notes |
-|---|---|---|---|
-| `POLARIS` | HyRiver | CONUS | 30 m; 9 properties |
-| `SOILGRIDS` | GEE | Global | 250 m; ISRIC |
-| `OPENLANDMAP_BEDROCK` | GEE | Global | 250 m; depth to bedrock (USDA-Simard); GEE auth required |
-
-### Impervious Surface (2 products)
-
-| ID | Source | Coverage | Resolution | Notes |
-|---|---|---|---|---|
-| `NLCD_IMPERVIOUS` | HyRiver | CONUS | 30 m | NLCD 2021 impervious surface fraction; auth-free |
-| `GHSL_BUILT_UP` | GEE | Global | 100 m | JRC Global Human Settlement Layer built-up surface; GEE auth required |
-
-### Vegetation (3 products)
-
-| ID | Variable | Source | Coverage | Resolution | Timestep |
+| ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `MODIS_NDVI` | NDVI | GEE | Global | 250 m | 16-day composite |
-| `SENTINEL2_NDVI` | NDVI | GEE | Global | 10 m | ~5 day revisit |
-| `MODIS_LAI` | LAI | GEE | Global | 500 m | 8-day composite |
+| `NLCD` | hyriver | CONUS | 30 m | static | auth-free |
+| `ESA_WORLDCOVER` | gee | global | 10 m | static | GEE auth required |
+| `DYNAMIC_WORLD` | gee | global | 10 m | static | GEE auth required |
+| `ESA_WORLDCOVER_STAC` | stac | global | 10 m | static | auth-free |
+
+### Soil Properties (2 products)
+
+| ID | Source | Coverage | Resolution | Timestep | Notes |
+|---|---|---|---|---|---|
+| `POLARIS` | hyriver | CONUS | 30 m | static | auth-free |
+| `SOILGRIDS` | gee | global | 250 m | static | GEE auth required |
+
+### NDVI (2 products)
+
+| ID | Source | Coverage | Resolution | Timestep | Notes |
+|---|---|---|---|---|---|
+| `MODIS_NDVI` | gee | global | 250 m | monthly | GEE auth required |
+| `SENTINEL2_NDVI` | gee | global | 10 m | monthly | GEE auth required |
+
+### LAI (1 product)
+
+| ID | Source | Coverage | Resolution | Timestep | Notes |
+|---|---|---|---|---|---|
+| `MODIS_LAI` | gee | global | 500 m | monthly | GEE auth required |
 
 ### Optical (5 products)
 
-| ID | Source | Coverage | Resolution | Notes |
-|---|---|---|---|---|
-| `SENTINEL2_SR` | GEE | Global | 10 m | Surface reflectance; GEE auth required |
-| `LANDSAT9_SR` | GEE | Global | 30 m | Landsat 9 L2 SR; GEE auth required |
-| `LANDSAT8_SR` | GEE | Global | 30 m | Landsat 8 L2 SR; GEE auth required |
-| `SENTINEL2_SR_STAC` | STAC | Global | 10 m | **auth-free** via Planetary Computer |
-| `LANDSAT_SR_STAC` | STAC | Global | 30 m | **auth-free** Landsat C2 L2 via Planetary Computer |
-
-### Geology (3 products)
-
-Area-weighted lithology and hydrogeology attributes from GLiM and GLHYMPS, returned as a
-single-row DataFrame. `result.data.iloc[0].to_dict()` gives all 9 CAMELS-geology attributes.
-
-> **License gate:** GLiM redistribution requires CCGM written permission. Tiles are available
-> for private research via `PYGEOGLIM_HF_TOKEN`. Public release is fails-closed pending permission.
-
-| ID | Source | Coverage | Notes |
-|---|---|---|---|
-| `PYGEOGLIM_ALL` | pygeoglim | Global | **Default.** Combined GLiM + GLHYMPS → 9 attributes: 5 lithology + 4 hydrogeology |
-| `GLIM_TILES` | pygeoglim | Global | GLiM lithology only: `geol_1st_class`, `glim_1st_class_frac`, `geol_2nd_class`, `glim_2nd_class_frac`, `carbonate_rocks_frac` |
-| `GLHYMPS_TILES` | pygeoglim | Global | GLHYMPS hydrogeology only: `geol_porosity`, `geol_permeability` (log₁₀ m²), `geol_permeability_linear`, `hydraulic_conductivity` |
-
-```python
-# All geology attributes in one call
-result = fetch("geology", watershed_gdf, "2020-01-01", "2020-12-31")
-attrs = result.data.iloc[0].to_dict()
-# → {'geol_1st_class': 'Siliciclastic...', 'carbonate_rocks_frac': 0.18,
-#    'geol_porosity': 0.099, 'geol_permeability': -11.1, ...}
-
-# Aliases also work
-fetch("lithology", ...)     # → geology
-fetch("hydrogeology", ...)  # → geology
-fetch("permeability", ...)  # → geology
-```
-
-### Flood Inundation (1 product)
-
-| ID | Source | Coverage | Notes |
-|---|---|---|---|
-| `GFM_S1_INUNDATION` | Direct API | Global | Copernicus GFM SAR-derived flood extent; event-based, not operational forecast |
+| ID | Source | Coverage | Resolution | Timestep | Notes |
+|---|---|---|---|---|---|
+| `SENTINEL2_SR` | gee | global | 10 m | composite | GEE auth required |
+| `LANDSAT9_SR` | gee | global | 30 m | composite | GEE auth required |
+| `LANDSAT8_SR` | gee | global | 30 m | composite | GEE auth required |
+| `SENTINEL2_SR_STAC` | stac | global | 10 m | composite | auth-free |
+| `LANDSAT_SR_STAC` | stac | global | 30 m | composite | auth-free |
 
 ### Streamflow (4 products)
 
-| ID | Source | Coverage | Notes |
-|---|---|---|---|
-| `NWIS_STREAMFLOW` | Direct API | CONUS | USGS daily values; pass gauge ID as geometry; auth-free |
-| `GEOGLOWS_RETRO` | GEOGLOWS | Global | Modelled 1940–present via AWS Open Data Zarr; TDX-Hydro reach network; **auth-free** |
-| `OPENMETEO_FLOOD` | Direct API | Global | Open-Meteo river discharge model; centroid-snapped; **auth-free** |
-| `GLOFAS_STREAMFLOW` | CDS / GloFAS | Global | GloFAS v4 modelled discharge; requires free Copernicus CDS account + `~/.cdsapirc` |
+| ID | Source | Coverage | Resolution | Timestep | Notes |
+|---|---|---|---|---|---|
+| `NWIS_STREAMFLOW` | direct_api | CONUS | 0 m | daily | auth-free; spatial support: gauge_point |
+| `GEOGLOWS_RETRO` | geoglows_retro | global | 0 m | daily | auth-free; spatial support: reach |
+| `OPENMETEO_FLOOD` | openmeteo_flood | global | 5 km | daily | auth-free; spatial support: reach |
+| `GLOFAS_STREAMFLOW` | cds_glofas | global | 5 km | daily | spatial support: reach |
 
----
+### Bedrock Depth (1 product)
+
+| ID | Source | Coverage | Resolution | Timestep | Notes |
+|---|---|---|---|---|---|
+| `OPENLANDMAP_BEDROCK` | gee | global | 250 m | static | GEE auth required |
+
+### Flood Inundation (1 product)
+
+| ID | Source | Coverage | Resolution | Timestep | Notes |
+|---|---|---|---|---|---|
+| `GFM_S1_INUNDATION` | direct_api | global | 20 m | event | auth-free |
+
+### Geology (3 products)
+
+| ID | Source | Coverage | Resolution | Timestep | Notes |
+|---|---|---|---|---|---|
+| `PYGEOGLIM_ALL` | pygeoglim | global | 0 m | static | auth-free |
+| `GLIM_TILES` | pygeoglim | global | 0 m | static | auth-free |
+| `GLHYMPS_TILES` | pygeoglim | global | 0 m | static | auth-free |
+
+### Impervious (2 products)
+
+| ID | Source | Coverage | Resolution | Timestep | Notes |
+|---|---|---|---|---|---|
+| `NLCD_IMPERVIOUS` | hyriver | CONUS | 30 m | static | auth-free |
+| `GHSL_BUILT_UP` | gee | global | 100 m | static | GEE auth required |
+
+### Population (3 products)
+
+| ID | Source | Coverage | Resolution | Timestep | Notes |
+|---|---|---|---|---|---|
+| `GHSL_POP` | gee | global | 100 m | 5-yearly | — |
+| `WORLDPOP` | gee | global | 100 m | annual | — |
+| `GPW_V411` | gee | global | 927 m | 5-yearly | — |
 
 ## Routing System
 
@@ -533,7 +545,7 @@ Every success carries `citation`, `bibtex`, `units`, `license`, and `next_steps`
 # Offline suite (no network, no auth — ~7 seconds)
 pytest -m "not live"
 
-# Live sweep — tests all 54 products against real backends (~15 minutes)
+# Live sweep — tests all 57 products against real backends (~15 minutes)
 # Requires GEE auth + internet
 pytest tests/test_live_sweep.py -v
 ```
@@ -542,7 +554,7 @@ pytest tests/test_live_sweep.py -v
 
 ## Status
 
-**v0.2.1** — STAC robustness + metadata repair: retry+backoff in STAC backend; `GLO30_ELEMENT84`; impervious + bedrock_depth variables; and corrected `aihydro-core` dependency metadata so downstream `aihydro-watershed`/`aihydro-tools` resolve with `aihydro-core>=0.2`. 54 products across 18 variables; 369 offline tests.
+**v0.2.1** — STAC robustness + metadata repair: retry+backoff in STAC backend; `GLO30_ELEMENT84`; impervious + bedrock_depth variables; and corrected `aihydro-core` dependency metadata so downstream `aihydro-watershed`/`aihydro-tools` resolve with `aihydro-core>=0.2`. Shipped with 54 products in 18 variables and 369 offline tests (current counts: see [Products](#products)).
 
 **v0.2.0** — First public PyPI release. Global streamflow tri-source chain (GEOGLOWS/Open-Meteo/GloFAS); spatial-support honesty (point vs areal vs reach products declared and enforced); verify-on-read cache; `region` and `outlet` kwargs; structural refactor (gee/ package, MCP `@_tool_envelope`); 341 offline tests.
 

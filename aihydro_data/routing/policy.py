@@ -63,6 +63,22 @@ PRODUCT_POLICY: dict[tuple[str, str], list[str]] = {
     # mode-composite that is not yet implemented (fetch_raster only handles static
     # mosaics). ESA_WORLDCOVER (GEE ImageCollection mosaic) is the global primary;
     # ESA_WORLDCOVER_STAC (Planetary Computer) is the auth-free fallback.
+    # ── population (added 2026-08-27 for downstream-exposure screening) ──
+    # GHSL first everywhere: consistent 1975-2030 series at 100 m, and the only
+    # one with epochs at or beyond the present. WorldPop second (annual, but the
+    # record stops at 2020). GPW last: ~927 m, too coarse for small catchments,
+    # but it is a plain census disaggregation and so fails differently from the
+    # two built-up-modelled products above.
+    ("population", "global"):           ["GHSL_POP", "WORLDPOP", "GPW_V411"],
+    ("population", "CONUS"):            ["GHSL_POP", "WORLDPOP", "GPW_V411"],
+    ("population", "NORTH_AMERICA"):    ["GHSL_POP", "WORLDPOP", "GPW_V411"],
+    ("population", "SOUTH_AMERICA"):    ["GHSL_POP", "WORLDPOP", "GPW_V411"],
+    ("population", "EUROPE"):           ["GHSL_POP", "WORLDPOP", "GPW_V411"],
+    ("population", "AFRICA"):           ["GHSL_POP", "WORLDPOP", "GPW_V411"],
+    ("population", "ASIA"):             ["GHSL_POP", "WORLDPOP", "GPW_V411"],
+    ("population", "S_ASIA"):           ["GHSL_POP", "WORLDPOP", "GPW_V411"],
+    ("population", "OCEANIA"):          ["GHSL_POP", "WORLDPOP", "GPW_V411"],
+
     ("landcover", "CONUS"):             ["NLCD", "ESA_WORLDCOVER", "ESA_WORLDCOVER_STAC"],
     ("landcover", "NORTH_AMERICA"):     ["NLCD", "ESA_WORLDCOVER", "ESA_WORLDCOVER_STAC"],
     ("landcover", "global"):            ["ESA_WORLDCOVER", "ESA_WORLDCOVER_STAC"],
