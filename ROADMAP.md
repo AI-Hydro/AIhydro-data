@@ -90,3 +90,7 @@ Tracked separately so the monolith never breaks for downstream users.
 2. If it's a new data product: link the dataset homepage + check the licence + note auth requirements.
 3. If it's a new backend: sketch the `SourceBackend.fetch_timeseries()` signature in the issue body.
 4. PRs welcome — see `ARCHITECTURE.md` § "Adding a new product: checklist".
+
+## Research-readiness continuation — 2026-09-08
+
+Local precipitation/flood/identity repairs are recorded in PROGRESS.md and plans/. Next gates: source-revision-aware cache keys and immutable assets; authenticated source checks; complete spatial/temporal support; joint observation/model validity masks. CHIRPS routes now declare different versions and shared inputs, but the platform does not yet quantify error dependence or certify satellite observations.
