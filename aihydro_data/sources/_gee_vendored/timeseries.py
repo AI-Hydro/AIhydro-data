@@ -57,11 +57,23 @@ def extract_timeseries(
     temporal_aggregation: str = "daily",
     scale_m: float = 5000.0,
     project_id: str | None = None,
+    temporal_contract: str | None = None,
 ) -> dict[str, Any]:
+    from .precipitation import CONTRACT, daily_window, integrate_daily
+
+    if temporal_contract is not None and temporal_contract != CONTRACT:
+        raise ValueError(f"Unknown temporal contract: {temporal_contract}")
+    query_end = end_date
+    if temporal_contract == CONTRACT:
+        if temporal_aggregation != "daily":
+            raise ValueError("IMERG integration contract supports daily output only")
+        _, stop = daily_window(start_date, end_date)
+        query_end = stop.strftime("%Y-%m-%d")
+
     ok, ee, err = _import_ee()
     if not ok:
         return {
-            "ok": True,
+            "ok": False,
             "mock": True,
             "type": "gee_timeseries",
             "rows": [],
@@ -84,7 +96,7 @@ def extract_timeseries(
 
         roi = ee.Geometry(roi_geojson)
         reducer = _reducer(ee, spatial_reducer)
-        collection = ee.ImageCollection(dataset_id).filterDate(start_date, end_date).select(band)
+        collection = ee.ImageCollection(dataset_id).filterDate(start_date, query_end).select(band)
 
         def _image_to_feature(image: Any) -> Any:
             stats = image.reduceRegion(
@@ -100,6 +112,8 @@ def extract_timeseries(
                 {
                     "date": date,
                     "value": stats.get(band),
+                    **({"time_start_ms": image.get("system:time_start"),
+                        "status": image.get("status")} if temporal_contract else {}),
                 },
             )
 
@@ -108,9 +122,12 @@ def extract_timeseries(
         raw_rows: list[dict[str, Any]] = []
         for feature in info.get("features", []):
             props = feature.get("properties", {})
-            raw_rows.append({"date": props.get("date"), "value": props.get("value")})
+            raw_rows.append({"date": props.get("date"), "value": props.get("value"),
+                             **({"time_start_ms": props.get("time_start_ms"),
+                                 "status": props.get("status")} if temporal_contract else {})})
 
-        rows = _aggregate_rows(raw_rows, temporal_aggregation)
+        rows = (integrate_daily(raw_rows, start_date, end_date) if temporal_contract
+                else _aggregate_rows(raw_rows, temporal_aggregation))
         return {
             "ok": True,
             "type": "gee_timeseries",
@@ -122,6 +139,7 @@ def extract_timeseries(
                 "band": band,
                 "spatial_reducer": spatial_reducer,
                 "temporal_aggregation": temporal_aggregation,
+                "temporal_contract": temporal_contract,
                 "scale_m": scale_m,
                 "project_id": project_id,
                 "computed_at": datetime.now(timezone.utc).isoformat(),

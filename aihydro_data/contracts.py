@@ -76,6 +76,12 @@ class ProductSpec(BaseModel):
     source: SourceId = Field(..., description="Which backend serves this product.")
     source_dataset_id: str = Field("", description="Backend-specific dataset key (e.g. GEE asset ID).")
 
+    # Declared scientific identity; empty values mean not yet declared.
+    dataset_version: str = ""
+    variant: str = ""
+    temporal_derivation: str = ""
+    input_dependencies: list[str] = Field(default_factory=list)
+
     # Capabilities
     coverage: list[CoverageTag] = Field(default_factory=list, description="Regions this product covers.")
     temporal_start: str = Field("", description="ISO-8601 earliest available date (empty = unknown/static).")
@@ -172,6 +178,9 @@ class FetchResult(BaseModel):
     # The actual data — pd.DataFrame for time series, xr.DataArray for rasters
     data: Any
 
+    # Captured at fetch time, never inferred from the current registry on cache read.
+    product_identity: dict[str, Any] = Field(default_factory=dict)
+
     # Provenance for the citations ledger
     license: str = ""
     citation: str = ""
@@ -184,6 +193,34 @@ class FetchResult(BaseModel):
     # never mistake a single-cell series for a catchment aggregate.
     spatial_support: str = "areal"
     aggregation_actual: str = ""
+
+    # Unit and support honesty. These mirror the served ProductSpec. Without
+    # them a caller holding `data` cannot tell mm/day from mm/hr, or Kelvin
+    # from Celsius, and the fallback chain routinely switches between products
+    # that differ in native cadence and interpretation; GRIDMET reports
+    # Kelvin where DAYMET reports Celsius. `common_pitfalls` carries the served product's own
+    # warnings (e.g. "Native units are Kelvin; subtract 273.15") to the point
+    # of use instead of leaving them in the registry.
+    units: str = ""
+    timestep: str = ""
+    resolution_m: Optional[float] = None
+    common_pitfalls: list[str] = Field(default_factory=list)
+
+    # Temporal-coverage honesty. The router serves whatever record a product
+    # actually holds; a product whose archive stops short of the requested
+    # window returns a truncated series rather than an error. These fields
+    # record the window that was asked for against the window that came back,
+    # so downstream code never mistakes absent data for measured values — a
+    # `.tail(7).sum()` over a series that ends before the window does silently
+    # returns 0.0, which reads as "nothing happened" but means "nothing known".
+    # `coverage_complete` is False whenever either end falls short by more than
+    # `coverage_tolerance_days`.
+    coverage_start: str = ""
+    coverage_end: str = ""
+    coverage_complete: bool = True
+    days_missing_head: int = 0
+    days_missing_tail: int = 0
+    coverage_tolerance_days: int = 1
 
     # Agent-facing affordances
     next_steps: list[dict[str, str]] = Field(default_factory=list)
@@ -202,7 +239,13 @@ class FetchResult(BaseModel):
         return (
             f"FetchResult(variable={self.variable!r}, product={self.product!r}, "
             f"source={self.source!r}, cache_hit={self.cache_hit})\n"
-            f"  data: {type(self.data).__name__}\n"
+            f"  data: {type(self.data).__name__}  units={self.units or 'UNDECLARED'}"
+            f"  timestep={self.timestep or 'unknown'}\n"
+            + ("" if self.coverage_complete else
+               f"  COVERAGE INCOMPLETE: {self.coverage_start}..{self.coverage_end} "
+               f"(missing {self.days_missing_head}d at start, "
+               f"{self.days_missing_tail}d at end)\n")
+            + 
             f"  citation: {self.citation[:80]}{'...' if len(self.citation) > 80 else ''}\n"
             f"  next_steps: {[s['tool'] for s in self.next_steps]}"
         )

@@ -584,3 +584,13 @@ If you use `aihydro-data` in your research, please cite it:
 ## License
 
 Apache-2.0. Data products carry their own licenses — always check `result.license` or `data_describe_product(id)`.
+
+### IMERG daily precipitation contract
+
+`IMERG_PRECIP` integrates the native half-hourly rates into complete UTC daily totals. Date-only start/end are inclusive for this product. Missing, duplicate or invalid intervals fail instead of producing partial totals. Returned `interval_count`, `expected_interval_count` and `source_status` columns expose temporal support and product maturity. Provisional or unknown status must not be cited as verified Final data. This check does not establish spatial completeness or observational accuracy. See [the decision and limitations](DECISIONS.md) and [implementation plan](plans/precipitation-contract-2026-09-07.md).
+
+### CHIRPS versions and cached identity
+
+`CHIRPS` currently routes to **v3 daily SAT** on GEE. `CHIRPS_IRI` serves **v2 daily-improved**; fallback between them changes the scientific product. V3 SAT uses IMERG Late V07 for daily partitioning of pentad totals, so comparison with IMERG must account for shared inputs.
+
+Inspect `result.product_identity` (also returned by MCP) for version, variant, derivation, dependencies and interpretation metadata. New caches retain the identity and warnings captured at fetch time. Empty legacy identity means unknown. These are configured-product declarations, not verification of upstream asset bytes or revision. See [the identity decision](DECISIONS.md).

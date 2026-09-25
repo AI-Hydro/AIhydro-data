@@ -46,6 +46,8 @@ class ManifestEntry:
         notes: list[str] | None = None,
         spatial_support: str = "areal",
         aggregation_actual: str = "",
+        product_identity: dict[str, Any] | None = None,
+        fallback_history: list[dict[str, str]] | None = None,
     ) -> None:
         self.cache_key = cache_key
         self.variable = variable
@@ -63,6 +65,8 @@ class ManifestEntry:
         self.notes = notes or []
         self.spatial_support = spatial_support
         self.aggregation_actual = aggregation_actual
+        self.product_identity = product_identity or {}
+        self.fallback_history = fallback_history or []
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -82,6 +86,8 @@ class ManifestEntry:
             "notes": self.notes,
             "spatial_support": self.spatial_support,
             "aggregation_actual": self.aggregation_actual,
+            "product_identity": self.product_identity,
+            "fallback_history": self.fallback_history,
         }
 
     @classmethod
@@ -103,6 +109,8 @@ class ManifestEntry:
             notes=d.get("notes", []),
             spatial_support=d.get("spatial_support", "areal"),
             aggregation_actual=d.get("aggregation_actual", ""),
+            product_identity=d.get("product_identity", {}),
+            fallback_history=d.get("fallback_history", []),
         )
 
 

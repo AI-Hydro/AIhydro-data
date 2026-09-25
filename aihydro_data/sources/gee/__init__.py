@@ -135,6 +135,8 @@ class Backend(_CompositeMixin, _DownloadMixin, SourceBackend):
                         spatial_reducer=spatial_reducer,
                         temporal_aggregation=temporal_agg,
                         scale_m=scale_m,
+                        **({"temporal_contract": cfg["temporal_contract"]}
+                           if cfg.get("temporal_contract") else {}),
                     ),
                     label=f"gee.extract_timeseries({dataset_id})",
                 )
@@ -228,6 +230,12 @@ class Backend(_CompositeMixin, _DownloadMixin, SourceBackend):
             df[spec.variable] = df[spec.variable] * unit_conv
         df["date"] = pd.to_datetime(df["date"])
 
+        if cfg.get("temporal_contract"):
+            df.attrs["aihydro_notes"] = [
+                "IMERG daily totals: sum of 48 half-hourly rates × 0.5 hours; inclusive UTC dates. "
+                "Temporal completeness checked; stable spatial masks and basin-area weighting are not verified. "
+                "Inspect source_status per day; provisional/unknown data are not certified Final products."
+            ]
         return df.reset_index(drop=True)
 
     def fetch_raster(

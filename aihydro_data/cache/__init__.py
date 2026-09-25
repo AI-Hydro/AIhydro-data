@@ -128,7 +128,44 @@ def cache_read(
         aggregation=manifest.aggregation,  # type: ignore[arg-type]
     )
 
+    # New entries preserve interpretation at fetch time. Legacy entries retain
+    # the existing registry fallback for units/support, but version identity
+    # remains unknown rather than being invented from today's ProductSpec.
+    _units = _timestep = ""
+    _res_m = None
+    _pitfalls: list[str] = []
+    try:
+        from aihydro_data.products import get_product
+        _spec = get_product(manifest.product)
+        _units = getattr(_spec, "units", "") or ""
+        _timestep = getattr(_spec, "timestep", "") or ""
+        _res_m = getattr(_spec, "resolution_m", None)
+        _pitfalls = list(getattr(_spec, "common_pitfalls", []) or [])
+    except Exception:
+        pass
+
+    if manifest.product_identity:
+        _units = manifest.product_identity.get("units", _units)
+        _timestep = manifest.product_identity.get("timestep", _timestep)
+        _res_m = manifest.product_identity.get("resolution_m", _res_m)
+        _pitfalls = manifest.product_identity.get("common_pitfalls", _pitfalls)
+
+    # Coverage is a property of the restored data against the requested window,
+    # so recompute it rather than trusting anything stored.
+    try:
+        from aihydro_data._pipeline import _temporal_coverage
+        _cov = _temporal_coverage(data, _req.start, _req.end, timestep=_timestep)
+    except Exception:
+        _cov = {}
+
     return FetchResult(
+        **_cov,
+        product_identity=manifest.product_identity,
+        fallback_history=manifest.fallback_history,
+        units=_units,
+        timestep=_timestep,
+        resolution_m=_res_m,
+        common_pitfalls=_pitfalls,
         variable=manifest.variable,
         product=manifest.product,
         source=manifest.source,  # type: ignore[arg-type]
@@ -143,7 +180,7 @@ def cache_read(
         spatial_support=getattr(manifest, "spatial_support", "areal"),
         aggregation_actual=getattr(manifest, "aggregation_actual", ""),
         next_steps=[],
-        notes=[f"Served from disk cache (fetched {manifest.fetched_at[:10]})."],
+        notes=list(manifest.notes) + [f"Served from disk cache (fetched {manifest.fetched_at[:10]})."],
     )
 
 
@@ -241,6 +278,9 @@ def cache_write(result: "FetchResult", geom_wkt: str = "") -> None:
         citation=result.citation,
         bibtex=result.bibtex,
         data_file=data_file,
+        product_identity=result.product_identity,
+        fallback_history=result.fallback_history,
+        notes=list(result.notes),
         spatial_support=getattr(result, "spatial_support", "areal"),
         aggregation_actual=getattr(result, "aggregation_actual", ""),
     )

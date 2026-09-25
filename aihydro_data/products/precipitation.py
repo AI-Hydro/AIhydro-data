@@ -31,35 +31,40 @@ PRODUCTS: list[ProductSpec] = [
         variable="precipitation",
         source="gee",
         source_dataset_id="UCSB-CHC/CHIRPS/V3/DAILY_SAT",
+        dataset_version="3.0",
+        variant="daily_sat",
+        temporal_derivation="CHIRPS v3 pentad totals partitioned into daily amounts using IMERG Late V07",
+        input_dependencies=["CHIRPS v3 pentad", "NASA IMERG Late V07"],
         coverage=["global"],
         temporal_start="1981-01-01",
         temporal_end="present",
         resolution_m=5566,
         timestep="daily",
         units="mm/day",
-        license="public domain (Creative Commons CC0)",
+        license="CHC v3 page states CC BY 4.0; GEE catalog describes public domain (provider terms differ).",
         citation=(
-            "Funk, C. et al. (2015). The Climate Hazards Infrared Precipitation with "
-            "Stations–a new environmental record for monitoring extremes. "
-            "Scientific Data 2, 150066. https://doi.org/10.1038/sdata.2015.66"
+            "Climate Hazards Center Infrared Precipitation with Stations version 3. "
+            "CHIRPS3 Data Repository (2025). https://doi.org/10.15780/G2JQ0P. "
+            "Daily SAT variant (IMERG-based temporal disaggregation)."
         ),
         bibtex=(
-            "@article{funk2015chirps,\n"
-            "  author  = {Funk, Chris and others},\n"
-            "  title   = {The Climate Hazards Infrared Precipitation with Stations},\n"
-            "  journal = {Scientific Data},\n"
-            "  year    = {2015},\n"
-            "  volume  = {2},\n"
-            "  pages   = {150066},\n"
-            "  doi     = {10.1038/sdata.2015.66}\n"
+            "@dataset{chirps3,\n"
+            "  author = {{Climate Hazards Center}},\n"
+            "  title = {Climate Hazards Center Infrared Precipitation with Stations version 3},\n"
+            "  year = {2025},\n"
+            "  doi = {10.15780/G2JQ0P},\n"
+            "  note = {Daily SAT variant, IMERG-based temporal disaggregation}\n"
             "}"
         ),
-        homepage="https://www.chc.ucsb.edu/data/chirps",
+        homepage="https://www.chc.ucsb.edu/data/chirps3",
         requires_extras=["gee"],
         requires_auth=["gee"],
         common_pitfalls=[
             "Dates before 1981-01-01 are not available.",
-            "Satellite-gauge product; uncertainty varies by region and gauge density.",
+            "CHIRPS ID serves v3 daily SAT, not v2; CHIRPS_IRI is a different v2 daily-improved product.",
+            "Nominal v3 coverage is land between 60°S and 60°N; global routing is not proof of coverage.",
+            "Daily amounts partition pentad totals using IMERG Late V07; comparison with IMERG is not independent validation.",
+            "Satellite-gauge product; uncertainty varies by region and gauge density. Per-observation maturity is not verified.",
             "GEE auth required — run `aihydro-data auth gee` first.",
         ],
         examples=[
@@ -76,7 +81,7 @@ PRODUCTS: list[ProductSpec] = [
     ),
 
     # MSWEP's public GEE Community asset was removed in 2024. Until a stable
-    # replacement appears we ship NASA's IMERG (GPM L3 V07 Final) under the
+    # replacement appears we ship NASA's IMERG (GPM L3 V07) under the
     # same "alternative global precipitation reference" slot — both are
     # ~10 km global, sub-daily, well-validated.
     ProductSpec(
@@ -85,7 +90,7 @@ PRODUCTS: list[ProductSpec] = [
         source="gee",
         source_dataset_id="NASA/GPM_L3/IMERG_V07",
         coverage=["global"],
-        temporal_start="2000-06-01",
+        temporal_start="1998-01-01",
         temporal_end="present",
         resolution_m=11132,
         timestep="daily",   # native is half-hourly; backend aggregates to daily
@@ -93,16 +98,19 @@ PRODUCTS: list[ProductSpec] = [
         license="public domain (NASA GES DISC)",
         citation=(
             "Huffman, G. J., E. F. Stocker, D. T. Bolvin, E. J. Nelkin, J. Tan (2023). "
-            "GPM IMERG Final Precipitation L3 Half Hourly 0.1 degree x 0.1 degree V07. "
-            "NASA GES DISC. https://doi.org/10.5067/GPM/IMERG/3B-HH/07"
+            "GPM IMERG V07 half-hourly precipitation (GEE collection: permanent and provisional). "
+            "NASA GES DISC. Permanent: https://doi.org/10.5067/GPM/IMERG/3B-HH/07; "
+            "provisional: https://doi.org/10.5067/GPM/IMERG/3B-HH-L/07. "
+            "Use the DOI matching the returned source_status."
         ),
         bibtex=(
             "@dataset{huffman2023imerg,\n"
             "  author    = {Huffman, George J. and Stocker, Eric F. and Bolvin, David T. and Nelkin, Eric J. and Tan, Jackson},\n"
-            "  title     = {{GPM IMERG} Final Precipitation L3 Half Hourly 0.1 degree x 0.1 degree V07},\n"
+            "  title     = {{GPM IMERG} V07 half-hourly precipitation collection},\n"
             "  publisher = {NASA GES DISC},\n"
             "  year      = {2023},\n"
-            "  doi       = {10.5067/GPM/IMERG/3B-HH/07}\n"
+            "  url       = {https://developers.google.com/earth-engine/datasets/catalog/NASA_GPM_L3_IMERG_V07},\n"
+            "  note      = {Permanent DOI: 10.5067/GPM/IMERG/3B-HH/07; provisional DOI: 10.5067/GPM/IMERG/3B-HH-L/07. Select by source status.}\n"
             "}"
         ),
         homepage="https://gpm.nasa.gov/data/imerg",
@@ -110,8 +118,11 @@ PRODUCTS: list[ProductSpec] = [
         requires_auth=["gee"],
         common_pitfalls=[
             "Native cadence is half-hourly precipitation RATE (mm/hr).",
-            "Backend currently returns the native rate — multiply by 24 for daily totals.",
-            "Data starts 2000-06-01; requests before that return empty.",
+            "Daily totals integrate 48 complete UTC half-hours (rate × 0.5 h); start/end dates are inclusive.",
+            "Missing, duplicate, masked or invalid intervals fail; no zero filling or extrapolation.",
+            "GEE contains provisional and permanent products; inspect source_status for each day. "
+            "Final DOI applies only to permanent data; provisional source DOI: 10.5067/GPM/IMERG/3B-HH-L/07.",
+            "Temporal completeness does not verify stable pixel masks or basin-area weighting.",
         ],
         examples=[
             "fetch('precipitation', gdf, '2015-01-01', '2020-12-31', mode='manual', product='IMERG_PRECIP')",
@@ -119,6 +130,7 @@ PRODUCTS: list[ProductSpec] = [
         next_steps=_PRECIP_NEXT_STEPS,
         backend_config={
             "gee_dataset_id": "NASA/GPM_L3/IMERG_V07",
+            "temporal_contract": "imerg_half_hourly_rate_to_daily_v1",
             "band": "precipitation",
             "scale_m": 11132,
         },
@@ -268,13 +280,15 @@ PRODUCTS: list[ProductSpec] = [
     # Source: IRI/LDEO Data Library — Columbia University
     # URL   : https://iridl.ldeo.columbia.edu/SOURCES/.UCSB/.CHIRPS/.v2p0/
     #          .daily-improved/.global/.0p05/.prcp/dods
-    # Same underlying dataset as the GEE CHIRPS product; spatial/temporal
-    # resolution and units are identical (0.05° ≈ 5 km, mm/day, 1981–present).
+    # Distinct v2 daily-improved product; the GEE CHIRPS ID serves v3 daily SAT.
     ProductSpec(
         id="CHIRPS_IRI",
         variable="precipitation",
         source="direct_api",
-        source_dataset_id="chirps_iri",
+        source_dataset_id="https://iridl.ldeo.columbia.edu/SOURCES/.UCSB/.CHIRPS/.v2p0/.daily-improved/.global/.0p05/.prcp/dods",
+        dataset_version="2.0",
+        variant="daily-improved",
+        temporal_derivation="CHIRPS v2 daily-improved; exact temporal disaggregation not verified by this adapter",
         coverage=["global"],
         temporal_start="1981-01-01",
         temporal_end="present",
@@ -302,6 +316,7 @@ PRODUCTS: list[ProductSpec] = [
         requires_extras=["opendap"],
         requires_auth=[],        # No authentication required — main advantage over GEE CHIRPS
         common_pitfalls=[
+            "Serves CHIRPS v2 daily-improved, not the GEE CHIRPS v3 daily SAT product; fallback changes scientific product identity.",
             "Requires `pip install aihydro-data[opendap]` (xarray + netCDF4 with OPeNDAP support).",
             "Nominal coverage 50°S–50°N land; ocean pixels are fill-valued.",
             "Dates before 1981-01-01 are not available.",

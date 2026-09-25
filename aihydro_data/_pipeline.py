@@ -307,6 +307,17 @@ def fetch(
                 docs_anchor="routing",
             )
 
+    # Product-pin intent (S5): naming a product is an instruction, not a hint.
+    # Previously `product=` was accepted and silently discarded unless the
+    # caller also passed mode="manual", so an explicit pin could return a
+    # different product with nothing on the result to say so. Treat the pin as
+    # sufficient intent and promote the request to manual mode, recording the
+    # promotion so the behaviour is visible rather than magical.
+    _pin_promoted = False
+    if product is not None and mode == "auto":
+        mode = "manual"
+        _pin_promoted = True
+
     req = FetchRequest(
         variable=variable,
         geometry=geometry,
@@ -397,6 +408,12 @@ def fetch(
     from aihydro_data.cache import cache_key as _make_key, cache_read, cache_write
     geom_wkt = geom.wkt
     key_payload: dict[str, Any] = {
+        # Contract schema version. Bump whenever FetchResult gains a field that
+        # carries meaning rather than convenience, so entries written under the
+        # old contract are not restored with defaults that are indistinguishable
+        # from "the product declared nothing". A cached result missing `units`
+        # is far more dangerous than a cache miss.
+        "result_schema": RESULT_SCHEMA_VERSION,
         "variable": variable,
         "start": start,
         "end": end,
@@ -457,9 +474,14 @@ def fetch(
                 "product": spec.id, "source": spec.source,
                 "outcome": "served", "reason": "",
             })
-            result = result.model_copy(update={
-                "cache_key": ck, "fallback_history": history,
-            })
+            _update = {"cache_key": ck, "fallback_history": history}
+            if _pin_promoted:
+                _update["notes"] = list(result.notes) + [
+                    f"product={product!r} was pinned without mode='manual'; the "
+                    f"request was promoted to manual mode so the pin is honoured. "
+                    f"Pass fallback=[] to make the pin strict."
+                ]
+            result = result.model_copy(update=_update)
             # Write to disk cache (best-effort, never raises). Manifest
             # records WHICH product actually served the data, so the
             # provenance trail stays intact even though the key is
@@ -517,6 +539,88 @@ class _EmptyResult(Exception):
     """Internal sentinel: a candidate returned no usable data. Caught by the
     fetch() fallback loop and recorded as outcome='rejected' so the next
     product is tried. Never surfaces to callers."""
+
+
+# Version of the FetchResult contract as far as the cache is concerned. Bump on
+# any change to the fields a consumer relies on for interpretation:
+#   1 -> 2  added units, timestep, resolution_m, common_pitfalls,
+#           coverage_start/end, coverage_complete, days_missing_head/tail
+# v3 invalidates cached native IMERG rates previously labelled as daily totals.
+# v4 records product identity and avoids old CHIRPS citation metadata.
+RESULT_SCHEMA_VERSION = 4
+
+
+# Timesteps for which a single record legitimately represents the whole window.
+# A 5-yearly population epoch or a static soil grid is not "missing" the other
+# 364 days of a year-long request, and flagging it as such would fire on nearly
+# every fetch of those products — a warning nobody would keep reading.
+_EPOCHAL_TIMESTEPS = frozenset({
+    "static", "annual", "5-yearly", "yearly", "decadal", "monthly",
+    "8-day", "16-day", "5-day", "climatology",
+})
+
+
+def _temporal_coverage(data: Any, start: str, end: str,
+                       tolerance_days: int = 1,
+                       timestep: str = "") -> dict[str, Any]:
+    """Compare the window a caller asked for against the window actually served.
+
+    A product whose archive ends before the requested window does not fail — it
+    returns a shorter series. Downstream aggregations over that series (a rolling
+    sum, a "last 7 days" total) then silently describe a period for which no data
+    exists. This records the discrepancy so it can be seen and, where it matters,
+    rejected.
+
+    Returns keys matching FetchResult's coverage fields. Unknown/undatable data
+    is reported as complete, so we never invent a warning we cannot substantiate.
+    """
+    out: dict[str, Any] = {
+        "coverage_start": "", "coverage_end": "", "coverage_complete": True,
+        "days_missing_head": 0, "days_missing_tail": 0,
+        "coverage_tolerance_days": tolerance_days,
+    }
+    try:
+        import pandas as pd
+
+        idx = None
+        if isinstance(data, pd.DataFrame):
+            if "date" in data.columns:
+                idx = pd.to_datetime(data["date"], errors="coerce")
+            elif isinstance(data.index, pd.DatetimeIndex):
+                idx = pd.Series(data.index)
+        elif hasattr(data, "coords"):                     # xarray
+            for name in ("time", "date"):
+                if name in getattr(data, "coords", {}):
+                    idx = pd.Series(pd.to_datetime(data.coords[name].values))
+                    break
+        if idx is None:
+            return out
+
+        idx = idx.dropna()
+        if idx.empty:
+            return out
+
+        actual_start, actual_end = idx.min(), idx.max()
+        if (timestep or "").strip().lower() in _EPOCHAL_TIMESTEPS:
+            # Report the served range, but do not treat coarse epochs as gaps.
+            out.update(coverage_start=str(actual_start.date()),
+                       coverage_end=str(actual_end.date()),
+                       coverage_complete=True)
+            return out
+        req_start, req_end = pd.to_datetime(start), pd.to_datetime(end)
+        head = max(0, (actual_start - req_start).days)
+        tail = max(0, (req_end - actual_end).days)
+
+        out.update(
+            coverage_start=str(actual_start.date()),
+            coverage_end=str(actual_end.date()),
+            days_missing_head=int(head),
+            days_missing_tail=int(tail),
+            coverage_complete=bool(head <= tolerance_days and tail <= tolerance_days),
+        )
+    except Exception:
+        pass                                              # never fail a fetch over this
+    return out
 
 
 def _has_signal(data: Any) -> bool:
@@ -710,7 +814,34 @@ def _fetch_one(
     if support_note:
         notes.insert(0, support_note)
 
+    cov = _temporal_coverage(data, start, end,
+                             timestep=getattr(spec, "timestep", "") or "")
+    if not cov["coverage_complete"]:
+        notes.append(
+            f"COVERAGE INCOMPLETE: requested {start}..{end}, "
+            f"{spec.id} served {cov['coverage_start']}..{cov['coverage_end']} "
+            f"({cov['days_missing_head']}d missing at start, "
+            f"{cov['days_missing_tail']}d at end). Aggregations over this series "
+            f"describe only the days present; absent days are not zeros."
+        )
+
     return FetchResult(
+        **cov,
+        product_identity={
+            "product_id": spec.id, "source": spec.source,
+            "source_dataset_id": spec.source_dataset_id,
+            "dataset_version": spec.dataset_version, "variant": spec.variant,
+            "temporal_derivation": spec.temporal_derivation,
+            "input_dependencies": list(spec.input_dependencies),
+            "units": spec.units, "timestep": spec.timestep,
+            "resolution_m": spec.resolution_m,
+            "common_pitfalls": list(spec.common_pitfalls),
+            "identity_basis": "configured_product", "asset_revision_verified": False,
+        },
+        units=getattr(spec, "units", "") or "",
+        timestep=getattr(spec, "timestep", "") or "",
+        resolution_m=getattr(spec, "resolution_m", None),
+        common_pitfalls=list(getattr(spec, "common_pitfalls", []) or []),
         variable=spec.variable,
         product=spec.id,
         source=spec.source,
