@@ -10,7 +10,7 @@ import json
 import logging
 from typing import Any
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
 
 log = logging.getLogger(__name__)
 
@@ -44,13 +44,22 @@ def search_gfm_items(
     url = f"{GFM_STAC_API}/search?{query}"
     with urlopen(url, timeout=timeout) as resp:
         payload = json.load(resp)
-    return list(payload.get("features") or [])
+    from aihydro_data.exceptions import SourceUnavailable
+
+    if any(link.get("rel") == "next" for link in payload.get("links", [])):
+        raise SourceUnavailable(code="GFM_SEARCH_TRUNCATED",
+                                message="GFM search has additional pages; the result is incomplete.",
+                                recovery="Narrow the area/date request; paginated retrieval is not yet supported.")
+    features = payload.get("features")
+    if not isinstance(features, list):
+        raise ValueError("GFM search did not return a feature list")
+    return features
 
 
 def _read_flood_mask_window(
     asset_href: str,
     bounds_wgs84: list[float],
-) -> tuple[Any, Any, str] | None:
+) -> dict[str, Any]:
     """Read flooded (==1) boolean mask for bounds from one COG asset."""
     import numpy as np
     import rasterio
@@ -58,7 +67,7 @@ def _read_flood_mask_window(
     from rasterio.features import shapes
     from rasterio.warp import transform_bounds
     from rasterio.windows import from_bounds
-    from shapely.geometry import mapping, shape
+    from shapely.geometry import shape
     from shapely.ops import unary_union
 
     west, south, east, north = [float(v) for v in bounds_wgs84[:4]]
@@ -66,11 +75,23 @@ def _read_flood_mask_window(
         pb = transform_bounds(CRS.from_epsg(4326), src.crs, west, south, east, north)
         window = from_bounds(*pb, transform=src.transform)
         if window.width <= 0 or window.height <= 0:
-            return None
-        arr = src.read(1, window=window, boundless=True, fill_value=255)
-        flooded = arr == FLOOD_VALUE
+            raise ValueError("GFM window has no pixels")
+        # Integer windows keep the pixel transform consistent with the read array.
+        import math
+
+        from rasterio.windows import Window
+        left, top = math.floor(window.col_off), math.floor(window.row_off)
+        right = math.ceil(window.col_off + window.width)
+        bottom = math.ceil(window.row_off + window.height)
+        window = Window(left, top, right - left, bottom - top)
+        arr = src.read(1, window=window, boundless=True, masked=True, fill_value=255)
+        valid = ~np.ma.getmaskarray(arr) & np.isin(arr.data, [0, FLOOD_VALUE])
+        flooded = valid & (arr.data == FLOOD_VALUE)
+        support = {"valid_pixel_count": int(valid.sum()),
+                   "window_pixel_count": int(arr.size), "geometry": None,
+                   "crs": src.crs, "asset_href": asset_href}
         if not np.any(flooded):
-            return None
+            return support
         transform = src.window_transform(window)
         geoms = []
         for geom, val in shapes(flooded.astype(np.uint8), mask=flooded, transform=transform):
@@ -78,17 +99,17 @@ def _read_flood_mask_window(
                 continue
             geoms.append(shape(geom))
         if not geoms:
-            return None
+            return support
         merged = unary_union(geoms)
-        if merged.is_empty:
-            return None
-        return merged, src.crs, asset_href
+        if not merged.is_empty:
+            support["geometry"] = merged
+        return support
 
 
 def _geom_to_wgs84_geojson(geom, src_crs) -> dict[str, Any]:
+    import pyproj
     from shapely.geometry import mapping
     from shapely.ops import transform as shp_transform
-    import pyproj
 
     src = pyproj.CRS.from_user_input(src_crs)
     dst = pyproj.CRS.from_epsg(4326)
@@ -97,7 +118,6 @@ def _geom_to_wgs84_geojson(geom, src_crs) -> dict[str, Any]:
     else:
         transformer = pyproj.Transformer.from_crs(src, dst, always_xy=True)
         out_geom = shp_transform(transformer.transform, geom)
-    out_geom = out_geom.simplify(tolerance=0.0001, preserve_topology=True)
     return {
         "type": "FeatureCollection",
         "features": [
@@ -122,64 +142,57 @@ def fetch_gfm_stac_geojson(
     Returns geojson (possibly empty features if no flood in AOI) and metadata.
     Raises RuntimeError when STAC/network fails.
     """
-    items = search_gfm_items(bounds_wgs84, event_date, max_items=5, timeout=timeout)
-    if not items:
-        return {
-            "geojson": {"type": "FeatureCollection", "features": []},
-            "source": "gfm_stac_empty",
-            "event_date": event_date[:10],
-            "live": True,
-            "n_items": 0,
-            "note": "No GFM STAC items for date/bbox.",
-        }
-
+    from shapely.geometry import box, mapping, shape
     from shapely.ops import unary_union
-    from shapely.geometry import mapping, shape
-    import pyproj
-    from shapely.ops import transform as shp_transform
 
-    merged_geoms = []
-    src_crs = None
-    n_assets = 0
+    from aihydro_data.exceptions import SourceUnavailable
+
+    items = search_gfm_items(bounds_wgs84, event_date, max_items=20, timeout=timeout)
+    base = {"geojson": {"type": "FeatureCollection", "features": []},
+            "source": "gfm_stac", "event_date": event_date[:10], "live": True,
+            "synthetic": False, "evidence_kind": "satellite_derived",
+            "n_items": len(items), "n_assets_read": 0, "stac_api": GFM_STAC_API,
+            "validation_ready": False,
+            "validation_limitations": ["Joint valid observation footprint and model grid are not established.",
+                                       "Acquisition-time suitability and source quality masks require review."],
+            "spatial_coverage": "unverified", "items": []}
+    if not items:
+        return {**base, "status": "no_observations", "note": "No acquisitions found; this does not establish absence of flooding."}
+    geometries = []
+    failures = []
+    valid_pixels = 0
     for feat in items:
-        assets = feat.get("assets") or {}
-        asset = assets.get(GFM_FLOOD_ASSET)
-        if not asset:
-            continue
-        href = asset.get("href")
+        href = (feat.get("assets", {}).get(GFM_FLOOD_ASSET) or {}).get("href")
+        record = {"id": feat.get("id"), "datetime": feat.get("properties", {}).get("datetime"),
+                  "asset_href": href}
+        base["items"].append(record)
         if not href:
+            failures.append({**record, "error": "Flood asset missing"})
             continue
         try:
             result = _read_flood_mask_window(href, bounds_wgs84)
+            record.update({key: result[key] for key in ("valid_pixel_count", "window_pixel_count")})
+            if result["geometry"] is not None:
+                # Transform each tile before union: tiles may use different CRSs.
+                gj = _geom_to_wgs84_geojson(result["geometry"], result["crs"])
+                geom = shape(gj["features"][0]["geometry"]).intersection(box(*bounds_wgs84))
+                if not geom.is_empty:
+                    geometries.append(geom)
+            valid_pixels += result["valid_pixel_count"]
+            base["n_assets_read"] += 1
         except Exception as exc:
-            log.debug("Skip GFM asset %s: %s", href, exc)
-            continue
-        if result is None:
-            continue
-        geom, crs, _ = result
-        merged_geoms.append(geom)
-        src_crs = crs
-        n_assets += 1
-
-    if not merged_geoms:
-        return {
-            "geojson": {"type": "FeatureCollection", "features": []},
-            "source": "gfm_stac_no_flood",
-            "event_date": event_date[:10],
-            "live": True,
-            "n_items": len(items),
-            "n_assets_read": 0,
-            "note": "GFM tiles found but no flooded cells (value=1) in AOI.",
-        }
-
-    union = unary_union(merged_geoms)
-    gj = _geom_to_wgs84_geojson(union, src_crs)
-    return {
-        "geojson": gj,
-        "source": "gfm_stac",
-        "event_date": event_date[:10],
-        "live": True,
-        "n_items": len(items),
-        "n_assets_read": n_assets,
-        "stac_api": GFM_STAC_API,
-    }
+            failures.append({**record, "error": str(exc)})
+    if failures:
+        raise SourceUnavailable(code="GFM_ASSET_READ_FAILED",
+                                message="GFM reference is incomplete because one or more assets could not be read.",
+                                recovery="Retry failed assets or supply a verified observed reference.",
+                                details={"failures": failures, "n_assets_read": base["n_assets_read"]})
+    base["valid_pixel_count"] = valid_pixels
+    if not valid_pixels:
+        return {**base, "status": "no_valid_pixels", "note": "Acquisitions contain no valid flood classification in the requested window."}
+    if not geometries:
+        return {**base, "status": "no_flood_detected",
+                "note": "No flood detected in valid pixels; whole-area coverage and event-time suitability remain unverified."}
+    base["geojson"]["features"] = [{"type": "Feature", "geometry": mapping(unary_union(geometries)),
+                                    "properties": {"source": "gfm_stac", "synthetic": False}}]
+    return {**base, "status": "flood_detected"}

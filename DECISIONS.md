@@ -12,6 +12,16 @@ Bump result cache schema 2→3 to avoid returning old incorrectly labelled numer
 
 Source verified 2026-09-07: [Earth Engine IMERG V07 catalog](https://developers.google.com/earth-engine/datasets/catalog/NASA_GPM_L3_IMERG_V07), native cadence/units/status and current collection availability.
 
+## 2026-09-07 — Flood observations must not degrade into synthetic references
+
+R06: live GFM failures now raise typed errors. `allow_network=False` disables fetching; it does not authorize invented geometry. Only explicit `use_fixture=True` produces a synthetic polygon, marked at envelope and feature level and without an observational citation. The tools adapter rejects fixture responses from older installed data packages and cannot synthesize a fallback if the data package is missing.
+
+The STAC path distinguishes no acquisitions, no valid classified pixels, no flood detected in valid pixels, and detected flood. Missing assets or any read failure fail the request with item details, rather than silently producing partial coverage or a no-flood claim. Searches with a next-page link fail explicitly until pagination is implemented. Each geometry is reprojected before union; per-item IDs, acquisition times, asset URLs and pixel counts are retained. Counts describe read windows and can overlap across scenes; they are not a unique basin-area coverage measure.
+
+Automatic hindcast scoring is now `not_assessed`: extent polygons alone do not provide the joint valid observation footprint, grid alignment or event-time suitability. The observed map can remain useful while scoring is unavailable. The manual user-supplied-reference path is unchanged and still needs equivalent support-aware validation. Source quality/exclusion masks, spatial coverage, immutable asset checksums, pagination and live end-to-end validation remain open.
+
+Encoding checked against [EODC's GFM processing tutorial](https://docs.eodc.eu/tutorials/gfm_maximum_flood_extent_dask.html) and [JRC's 2024 quality assessment](https://publications.jrc.ec.europa.eu/repository/bitstream/JRC142154/JRC142154_01.pdf): 0 no flood, 1 flood, 255 nodata. Source limitations and additional masks are documented in the [GFM product manual](https://extwiki.eodc.eu/GFM/PUM/Products). Accessed 2026-09-07. No live source retrieval was used as validation evidence.
+
 ## 2026-09-08 — Preserve scientific product identity through fallback and cache
 
 Stable IDs and default routes remain unchanged: `CHIRPS` serves GEE CHIRPS v3 daily SAT; `CHIRPS_IRI` serves IRI v2 daily-improved. These are different scientific products. V3 SAT partitions pentad amounts using IMERG Late V07; this shared input must not be interpreted as independent evidence when comparing daily rainfall with IMERG. The v3 repository citation replaces the v2 paper citation, and provider/catalog licensing descriptions are explicitly distinguished rather than conflated.

@@ -589,6 +589,10 @@ Apache-2.0. Data products carry their own licenses — always check `result.lice
 
 `IMERG_PRECIP` integrates the native half-hourly rates into complete UTC daily totals. Date-only start/end are inclusive for this product. Missing, duplicate or invalid intervals fail instead of producing partial totals. Returned `interval_count`, `expected_interval_count` and `source_status` columns expose temporal support and product maturity. Provisional or unknown status must not be cited as verified Final data. This check does not establish spatial completeness or observational accuracy. See [the decision and limitations](DECISIONS.md) and [implementation plan](plans/precipitation-contract-2026-09-07.md).
 
+### GFM observational failures and synthetic fixtures
+
+`fetch_gfm_extent` raises on network/asset failures; it never substitutes synthetic polygons. `use_fixture=True` explicitly selects synthetic test data, without an observational citation. Inspect `status`: no acquisitions and no valid pixels are distinct from no flood detected. Per-item acquisition times and assets remain available for review. Automatic model-validation scores are withheld until a jointly valid comparison footprint is established; an extent alone is insufficient. See [the flood-reference decision](DECISIONS.md).
+
 ### CHIRPS versions and cached identity
 
 `CHIRPS` currently routes to **v3 daily SAT** on GEE. `CHIRPS_IRI` serves **v2 daily-improved**; fallback between them changes the scientific product. V3 SAT uses IMERG Late V07 for daily partitioning of pentad totals, so comparison with IMERG must account for shared inputs.

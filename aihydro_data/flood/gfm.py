@@ -2,7 +2,7 @@
 Global Flood Monitoring (GFM) Sentinel-1 inundation extent fetch.
 
 Live path: EODC STAC (``gfm_stac``) → ensemble_flood_extent COG → GeoJSON.
-Offline: documented fixture polygon for bench/agents without network.
+Fixtures require explicit opt-in and are never observational evidence.
 """
 from __future__ import annotations
 
@@ -50,7 +50,8 @@ def fixture_gfm_geojson(bounds: list[float], event_date: str) -> dict[str, Any]:
             {
                 "type": "Feature",
                 "geometry": {"type": "Polygon", "coordinates": [ring]},
-                "properties": {"source": "gfm_fixture", "event_date": event_date},
+                "properties": {"source": "gfm_fixture", "event_date": event_date,
+                               "synthetic": True, "evidence_kind": "synthetic_fixture"},
             }
         ],
     }
@@ -66,18 +67,29 @@ def fetch_gfm_extent(
     """
     Return GFM inundation extent GeoJSON for an event date and bbox.
 
-    Tries live EODC STAC when ``allow_network`` and not ``use_fixture``.
+    Live failures raise; only explicit ``use_fixture=True`` generates fixture geometry.
     """
     _parse_date(event_date)
-    if use_fixture or not allow_network:
+    from aihydro_data.exceptions import SourceUnavailable
+
+    if use_fixture:
         gj = fixture_gfm_geojson(bounds, event_date)
         return {
             "geojson": gj,
             "source": "gfm_fixture",
             "event_date": event_date,
             "live": False,
-            "citation": GFM_CITATION,
+            "citation": "",
+            "synthetic": True,
+            "evidence_kind": "synthetic_fixture",
+            "status": "synthetic",
+            "validation_ready": False,
         }
+
+    if not allow_network:
+        raise SourceUnavailable(code="GFM_NETWORK_DISABLED",
+                                message="GFM observations require network access.",
+                                recovery="Enable network access or supply an observed reference export.")
 
     try:
         from aihydro_data.flood.gfm_stac import fetch_gfm_stac_geojson
@@ -85,15 +97,10 @@ def fetch_gfm_extent(
         out = fetch_gfm_stac_geojson(bounds, event_date)
         out["citation"] = GFM_CITATION
         return out
+    except SourceUnavailable:
+        raise
     except Exception as exc:
-        log.warning("GFM STAC live fetch failed (%s); using fixture fallback", exc)
-        gj = fixture_gfm_geojson(bounds, event_date)
-        return {
-            "geojson": gj,
-            "source": "gfm_fixture_fallback",
-            "event_date": event_date,
-            "live": False,
-            "citation": GFM_CITATION,
-            "note": f"STAC error: {str(exc)[:200]}",
-            "recovery": "Check network or pass use_fixture=True for offline validation.",
-        }
+        raise SourceUnavailable(
+            code="GFM_FETCH_FAILED", message=f"GFM observations unavailable: {exc}",
+            recovery="Retry the source or supply an observed reference export; no synthetic substitute was generated.",
+        ) from exc

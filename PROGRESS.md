@@ -8,6 +8,14 @@ Verification: 130 selected offline tests passed initially; the strengthened real
 
 Final verification: all 130 selected tests passed after the cache regression was strengthened; focused Ruff passed. Whole-repo diff checking identifies pre-existing trailing whitespace in contracts.py:240 (not changed by this slice); the precipitation slice passes a scoped diff check.
 
+
+## 2026-09-07 — Flood reference honesty (R06, local/uncommitted)
+
+Removed synthetic observational fallback from data and tools adapters. Network-disabled/missing-package/live failures do not fabricate polygons; fixtures require explicit opt-in and synthetic labels. STAC no-acquisition/nodata/dry/flood outcomes are distinct, asset failures and pagination fail explicitly, and tiles are reprojected before union with acquisition/asset provenance retained. Automatic GFM scoring is not assessed without a joint valid observation footprint; observed map geometry remains available.
+
+Verification: 64 selected data tests passed (2 live tests deselected), 20 selected tools/inundation/layering tests passed. Real tiny raster fixtures cover nodata, dry/flood and differing CRSs; outage, missing-package and legacy synthetic responses covered. Focused Ruff, tools_analysis compilation and scoped diff checks passed. No live GFM request or installed-runtime test. Manual reference scoring, quality masks, support-aware validation and immutable asset lineage remain open. Canonical decision: MCP/aihydro-data/DECISIONS.md.
+
+
 ## 2026-09-08 — CHIRPS and served-product identity (local/uncommitted)
 
 GEE CHIRPS v3 daily SAT and IRI v2 daily-improved are now distinguished in declarations, citations, discovery and fetched/cached identity. V3 IMERG Late daily-partition dependency is explicit. Stable route IDs retained. New cache manifests preserve configured identity, interpretation fields, fallback history and notes; legacy identity stays unknown. MCP now forwards unit/coverage metadata that was previously omitted. Schema4 bypasses old citation metadata in normal fetches.

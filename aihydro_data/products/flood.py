@@ -43,7 +43,9 @@ PRODUCTS: list[ProductSpec] = [
         requires_auth=[],
         common_pitfalls=[
             "Event-date specific — pass start=end=event date.",
-            "Live API integration pending; tools use fixture fallback offline.",
+            "Live STAC errors raise; synthetic fixtures require explicit use_fixture=True and are not observations.",
+            "No acquisitions or no valid pixels does not mean no flood. Inspect status and item provenance.",
+            "Automatic model validation requires a joint valid observation footprint; not established by this fetch.",
         ],
         examples=[
             "from aihydro_data.flood.gfm import fetch_gfm_extent",
