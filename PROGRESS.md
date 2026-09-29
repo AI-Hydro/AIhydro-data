@@ -21,3 +21,10 @@ Verification: 64 selected data tests passed (2 live tests deselected), 20 select
 GEE CHIRPS v3 daily SAT and IRI v2 daily-improved are now distinguished in declarations, citations, discovery and fetched/cached identity. V3 IMERG Late daily-partition dependency is explicit. Stable route IDs retained. New cache manifests preserve configured identity, interpretation fields, fallback history and notes; legacy identity stays unknown. MCP now forwards unit/coverage metadata that was previously omitted. Schema4 bypasses old citation metadata in normal fetches.
 
 Verification: 164 selected offline tests passed, including fresh/cache/fallback/MCP and registry-change regressions; focused new-test Ruff and scoped diff checks passed. No live precipitation retrieval or asset revision verification. Pre-existing contracts.py trailing whitespace remains outside the scoped diff check. Next: joint observation/model support, source-revision-aware caching and live scientific validation. See MCP/aihydro-data/DECISIONS.md and plans/product-identity-2026-09-08.md.
+
+
+## 2026-09-29: Small CONUS DEMs from 3DEP; NLCD impervious layer fix (local commit, not pushed)
+
+CONUS DEM requests with a bounding box under 500 km² route to 3DEP 10 m first; larger ones keep GLO30 first (3DEP WCS times out on large requests). NLCD_IMPERVIOUS now returns percent impervious (it returned land-cover codes because the layer setting was ignored). NLCD default epoch 2021. Per-variable cache revision invalidates only old `dem` and `impervious` entries.
+
+Verification: 433 offline tests pass (+18 new, 5 routing stubs updated to the new signature); live: a 1 km² Indiana box now fetches DEM3DEP_10M at ~10 m, and impervious returns 0 to 100 percent. aihydro-watershed 71 and aihydro-tools 1101 offline tests pass against the change. See DECISIONS.md.

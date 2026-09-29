@@ -59,17 +59,17 @@ PRODUCTS: list[ProductSpec] = [
             "Discrete years only (2001, 2004, 2006, 2008, 2011, 2013, 2016, 2019, 2021).",
             "Values are 0–100 (percent, NOT fraction). Divide by 100 for fractional impervious.",
             "Urban/suburban pixels can be 80–95 %; undeveloped forest/agriculture near 0 %.",
-            "Pass year explicitly via backend_config if you need a specific epoch.",
+            "The year comes from the start date (snapped to the nearest epoch); with no start date it defaults to 2021.",
         ],
         examples=[
-            "fetch('impervious', gdf, '2019-01-01', '2019-12-31')  # CONUS → NLCD 2019",
+            "fetch('impervious', gdf, '2021-01-01', '2021-12-31')  # CONUS → NLCD 2021 percent impervious",
             "fetch('impervious', gdf, '2019-01-01', '2019-12-31', mode='manual', product='NLCD_IMPERVIOUS')",
         ],
         next_steps=_IMP_NEXT_STEPS,
         backend_config={
             "pygeohydro_product": "nlcd",
             "nlcd_layer": "impervious",
-            "default_year": 2019,
+            "default_year": 2021,
         },
     ),
 

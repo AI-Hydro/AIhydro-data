@@ -349,14 +349,14 @@ def fetch(
         if fallback is not None:
             fallback_ids = [f for f in fallback if f != product]
         else:
-            policy_ids = resolve_product_ids(variable, region)
+            policy_ids = resolve_product_ids(variable, region, geom)
             fallback_ids = [pid for pid in policy_ids if pid != product]
         candidate_specs = [primary_spec] + [
             get_product(fid) for fid in fallback_ids
             if _is_registered(fid)
         ]
     else:
-        candidate_ids = resolve_product_ids(variable, region)
+        candidate_ids = resolve_product_ids(variable, region, geom)
         if not candidate_ids:
             from aihydro_data.exceptions import RegionUnsupported
             from aihydro_data.routing.policy import PRODUCT_POLICY
@@ -413,7 +413,7 @@ def fetch(
         # old contract are not restored with defaults that are indistinguishable
         # from "the product declared nothing". A cached result missing `units`
         # is far more dangerous than a cache miss.
-        "result_schema": RESULT_SCHEMA_VERSION,
+        "result_schema": _result_schema_for(variable),
         "variable": variable,
         "start": start,
         "end": end,
@@ -548,6 +548,22 @@ class _EmptyResult(Exception):
 # v3 invalidates cached native IMERG rates previously labelled as daily totals.
 # v4 records product identity and avoids old CHIRPS citation metadata.
 RESULT_SCHEMA_VERSION = 4
+
+# Per-variable cache revisions. A fix that changes what one variable serves
+# bumps only that variable's entry, so its old cache entries stop matching
+# while every other variable's cache stays valid.
+#   impervious 1: NLCD_IMPERVIOUS used to return land-cover class codes
+#                 instead of percent impervious (fixed 2026-09-29).
+#   dem 1:        small CONUS requests now route to 3DEP 10 m before GLO-30
+#                 (2026-09-29); old GLO-30 entries for them must not be reused.
+_VARIABLE_CACHE_REVISION: dict[str, int] = {"impervious": 1, "dem": 1}
+
+
+def _result_schema_for(variable: str) -> int | str:
+    """Schema tag for the cache key: the global version, plus a per-variable
+    revision when one is declared. Unlisted variables keep their old keys."""
+    rev = _VARIABLE_CACHE_REVISION.get(variable)
+    return RESULT_SCHEMA_VERSION if rev is None else f"{RESULT_SCHEMA_VERSION}.{variable}.{rev}"
 
 
 # Timesteps for which a single record legitimately represents the whole window.

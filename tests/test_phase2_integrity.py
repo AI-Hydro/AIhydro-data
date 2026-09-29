@@ -107,7 +107,7 @@ class TestAggregationHonesty:
 
         import aihydro_data.routing as routing
         import aihydro_data.products as products
-        monkeypatch.setattr(routing, "resolve_product_ids", lambda v, r: ["REACH", "AREAL"])
+        monkeypatch.setattr(routing, "resolve_product_ids", lambda v, r, geometry=None: ["REACH", "AREAL"])
         monkeypatch.setattr(routing, "detect_region", lambda g: "global")
         monkeypatch.setattr(_pipeline, "_is_registered", lambda pid: True)
         reg = {"REACH": reach, "AREAL": areal}
@@ -161,7 +161,7 @@ class TestEmptyResultGate:
                            spatial_support="areal")
         import aihydro_data.routing as routing
         import aihydro_data.products as products
-        monkeypatch.setattr(routing, "resolve_product_ids", lambda v, r: ["EMPTY", "FULL"])
+        monkeypatch.setattr(routing, "resolve_product_ids", lambda v, r, geometry=None: ["EMPTY", "FULL"])
         monkeypatch.setattr(routing, "detect_region", lambda g: "global")
         monkeypatch.setattr(_pipeline, "_is_registered", lambda pid: True)
         reg = {"EMPTY": empty, "FULL": full}

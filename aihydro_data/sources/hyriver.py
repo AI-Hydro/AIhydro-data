@@ -38,12 +38,14 @@ _GRIDMET_VAR_MAP = {
 }
 
 
-# Discrete NLCD epochs (cover product). Caller-requested years snap to the
-# nearest available epoch so a request for e.g. 2019 hits the real product.
+# Discrete NLCD epochs (cover and impervious). Caller-requested years snap to
+# the nearest available epoch so a request for e.g. 2019 hits the real product.
 _NLCD_YEARS = (2001, 2004, 2006, 2008, 2011, 2013, 2016, 2019, 2021)
+# Latest epoch pygeohydro.nlcd_bygeom serves; used when no year is requested.
+NLCD_LATEST_YEAR = 2021
 
 
-def _nearest_nlcd_year(start: str, default: int = 2019) -> int:
+def _nearest_nlcd_year(start: str, default: int = NLCD_LATEST_YEAR) -> int:
     """Snap a requested year (from an ISO start date) to the nearest NLCD epoch."""
     try:
         requested = int(str(start)[:4])
@@ -362,9 +364,13 @@ class Backend(SourceBackend):
             # Honour the caller's requested year via the start date, snapping to
             # the nearest available NLCD epoch; fall back to the configured
             # default if the date can't be parsed.
-            year = _nearest_nlcd_year(start, default=cfg.get("default_year", 2019))
+            year = _nearest_nlcd_year(start, default=cfg.get("default_year", NLCD_LATEST_YEAR))
+            # The product's layer ("cover", "impervious", ...). This used to be
+            # hard-coded to "cover", so NLCD_IMPERVIOUS returned land-cover
+            # class codes instead of percent impervious.
+            layer = cfg.get("nlcd_layer", "cover")
             gdf = gpd.GeoDataFrame(geometry=[geometry], crs="EPSG:4326")
-            ds = gh.nlcd_bygeom(gdf, years={"cover": [year]}, resolution=cfg.get("resolution_m", 30))
+            ds = gh.nlcd_bygeom(gdf, years={layer: [year]}, resolution=cfg.get("resolution_m", 30))
             # nlcd_bygeom keyed by GeoDataFrame index → unwrap to a single Dataset.
             if isinstance(ds, dict):
                 ds = next(iter(ds.values()))

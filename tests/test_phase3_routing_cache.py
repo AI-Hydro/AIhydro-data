@@ -86,7 +86,7 @@ class TestRegionOverride:
         monkeypatch.setattr(routing, "detect_region", fake_detect)
         seen_region = {}
 
-        def fake_resolve(variable, region):
+        def fake_resolve(variable, region, geometry=None):
             seen_region["region"] = region
             return ["P"]
 
@@ -135,7 +135,7 @@ class TestOutletPassthrough:
                            source="geoglows_retro", timestep="daily",
                            spatial_support="reach")
         monkeypatch.setattr(routing, "detect_region", lambda g: "global")
-        monkeypatch.setattr(routing, "resolve_product_ids", lambda v, r: ["GEO"])
+        monkeypatch.setattr(routing, "resolve_product_ids", lambda v, r, geometry=None: ["GEO"])
         monkeypatch.setattr(products, "get_product", lambda pid: spec)
         monkeypatch.setattr(_pipeline, "_is_registered", lambda pid: True)
         import aihydro_data.sources.base as base
@@ -156,7 +156,7 @@ class TestOutletPassthrough:
         spec = ProductSpec(id="P", variable="precipitation", source="gee",
                            timestep="daily")
         monkeypatch.setattr(routing, "detect_region", lambda g: "global")
-        monkeypatch.setattr(routing, "resolve_product_ids", lambda v, r: ["P"])
+        monkeypatch.setattr(routing, "resolve_product_ids", lambda v, r, geometry=None: ["P"])
         monkeypatch.setattr(products, "get_product", lambda pid: spec)
         monkeypatch.setattr(_pipeline, "_is_registered", lambda pid: True)
         import aihydro_data.sources.base as base

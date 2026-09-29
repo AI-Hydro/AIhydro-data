@@ -164,7 +164,7 @@ def _would_route_to_queued_source(variable: str, geometry: Any, product: str | N
         if product:
             candidates = [product]
         else:
-            candidates = resolve_product_ids(variable, region)
+            candidates = resolve_product_ids(variable, region, geom)
 
         for pid in candidates:
             try:
@@ -490,7 +490,7 @@ def _data_validate_request(
     # 2. variable + routing
     if geom is not None:
         try:
-            candidates = resolve_product_ids(variable, detected_region)
+            candidates = resolve_product_ids(variable, detected_region, geom)
         except AihydroDataError:
             issues.append({
                 "code": "NO_PRODUCTS_FOR_REGION",

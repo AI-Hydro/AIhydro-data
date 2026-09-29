@@ -9,11 +9,15 @@ Rules:
 - Adding a new product = adding a row here + a ProductSpec in products/.
 - Editing routing logic = never. This table IS the logic.
 - "global" entries are the ultimate fallback for every region not listed.
+- _SMALL_REQUEST_FIRST (below the table) is the one size rule: it promotes a
+  product to the front when the request's bounding box is small enough.
 
 Phase 2: precipitation vertical.
 Phase 3: temperature, streamflow, landcover, soil.
 """
 from __future__ import annotations
+
+from typing import Any
 
 # (variable, region) → ordered product IDs (primary first)
 PRODUCT_POLICY: dict[tuple[str, str], list[str]] = {
@@ -97,11 +101,14 @@ PRODUCT_POLICY: dict[tuple[str, str], list[str]] = {
     ("pet", "global"):                  ["ERA5L_PET", "MOD16_PET", "OPEN_METEO_PET"],
 
     # ── DEM ───────────────────────────────────────────────────────────────
-    # DEM3DEP_10M (py3dep/HyRiver) moved to second position: its OGC WCS request
-    # times out on polygon inputs > ~500 km² (benchmark: 2276 km² → TimeoutError).
-    # GLO30 (GEE, 30 m) is reliable for any size and serves as the primary CONUS
-    # source; DEM3DEP_10M remains in the chain for callers who pin it manually or
-    # need 10 m resolution on small basins where it succeeds.
+    # The static CONUS order below (GLO30 first) is what LARGE requests get.
+    # DEM3DEP_10M's OGC WCS request times out on inputs > ~500 km² (benchmark:
+    # 2276 km² → TimeoutError), while GLO30 (GEE, 30 m) works at any size.
+    # For requests whose bounding box is under DEM3DEP_MAX_BBOX_KM2,
+    # resolve_product_ids moves DEM3DEP_10M to the front (see
+    # _SMALL_REQUEST_FIRST): 3DEP is bare earth at 10 m, whereas GLO-30 is a
+    # surface model that keeps tree canopy and buildings, which misroutes flow
+    # in small catchments.
     #
     # STAC tail: GLO30_STAC (Planetary Computer) → GLO30_ELEMENT84 (Element84 /
     # AWS).  Both serve the same Copernicus DEM GLO-30 COGs from independent
@@ -154,14 +161,61 @@ PRODUCT_POLICY: dict[tuple[str, str], list[str]] = {
 }
 
 
-def resolve_product_ids(variable: str, region: str) -> list[str]:
+# Size-aware preference: (variable, region) → (product promoted to the front,
+# maximum request bounding-box area in km²). Applied only when the caller
+# passes a geometry with non-zero area; points and unknown sizes keep the
+# static policy order.
+DEM3DEP_MAX_BBOX_KM2 = 500.0
+_SMALL_REQUEST_FIRST: dict[tuple[str, str], tuple[str, float]] = {
+    ("dem", "CONUS"): ("DEM3DEP_10M", DEM3DEP_MAX_BBOX_KM2),
+}
+
+
+def bbox_area_km2(geometry: Any) -> float | None:
+    """Geodesic area (km²) of a WGS84 geometry's bounding box, or None."""
+    try:
+        from pyproj import Geod
+        from shapely.geometry import box
+
+        minx, miny, maxx, maxy = geometry.bounds
+        area, _ = Geod(ellps="WGS84").geometry_area_perimeter(box(minx, miny, maxx, maxy))
+        return abs(area) / 1e6
+    except Exception:
+        return None
+
+
+def _apply_size_preference(
+    variable: str, region: str, ids: list[str], geometry: Any,
+) -> list[str]:
+    rule = _SMALL_REQUEST_FIRST.get((variable, region))
+    if rule is None or geometry is None:
+        return ids
+    pid, max_km2 = rule
+    area = bbox_area_km2(geometry)
+    if pid not in ids or area is None or area <= 0 or area >= max_km2:
+        return ids
+    return [pid] + [i for i in ids if i != pid]
+
+
+def resolve_product_ids(variable: str, region: str, geometry: Any = None) -> list[str]:
     """
     Return the ordered list of product IDs for (variable, region).
 
     Falls back through progressively broader region keys if the specific
     region isn't in the table:
       S_ASIA → ASIA → global
+
+    ``geometry`` (WGS84, optional) enables size-aware ordering: in CONUS a DEM
+    request whose bounding box is under ``DEM3DEP_MAX_BBOX_KM2`` gets USGS
+    3DEP 10 m first. Without a geometry the static policy order is returned.
     """
+    return _apply_size_preference(
+        variable, region, _resolve_static_ids(variable, region), geometry,
+    )
+
+
+def _resolve_static_ids(variable: str, region: str) -> list[str]:
+    """Policy lookup with the region-hierarchy fallback (no size rules)."""
     # Direct lookup
     key = (variable, region)
     if key in PRODUCT_POLICY:
