@@ -53,16 +53,16 @@ PRODUCTS: list[ProductSpec] = [
             "CONUS only.",
             "Available for discrete years (2001, 2004, 2006, 2008, 2011, 2013, 2016, 2019, 2021) — not continuous.",
             "Output is a categorical raster; never use numeric mean on class codes.",
-            "Pass `year` in backend_config; defaults to 2019.",
+            "The year comes from the start date (snapped to the nearest epoch); with no start date it defaults to 2021, the latest release.",
         ],
         examples=[
-            "fetch('landcover', gdf, '2019-01-01', '2019-12-31')  # auto → NLCD in CONUS",
+            "fetch('landcover', gdf, '2021-01-01', '2021-12-31')  # auto → NLCD 2021 in CONUS",
             "fetch('landcover', gdf, '2016-01-01', '2016-12-31', mode='manual', product='NLCD')",
         ],
         next_steps=_LC_NEXT_STEPS,
         backend_config={
             "pygeohydro_product": "nlcd",
-            "default_year": 2019,
+            "default_year": 2021,
         },
     ),
 

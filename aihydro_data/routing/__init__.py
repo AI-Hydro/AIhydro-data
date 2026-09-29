@@ -37,10 +37,10 @@ def resolve_product(req: "aihydro_data.contracts.FetchRequest") -> "aihydro_data
     geom = coerce_geometry(req.geometry)
     region = detect_region(geom)
 
-    candidates = resolve_product_ids(req.variable, region)
+    candidates = resolve_product_ids(req.variable, region, geom)
     if not candidates:
         # Try global as last resort
-        candidates = resolve_product_ids(req.variable, "global")
+        candidates = resolve_product_ids(req.variable, "global", geom)
     if not candidates:
         raise RegionUnsupported(
             code="REGION_NO_POLICY",
