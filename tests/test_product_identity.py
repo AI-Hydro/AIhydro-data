@@ -73,6 +73,38 @@ def test_fallback_reports_served_version_and_retains_trail(offline, monkeypatch)
     assert fetch(fallback=["CHIRPS_IRI"]).product_identity == result.product_identity
 
 
+def test_warm_fallback_cache_does_not_defeat_strict_pin(offline, monkeypatch):
+    from aihydro_data.exceptions import SourceUnavailable
+
+    real_backend = base.get_backend
+    def backend(source):
+        if source == "gee":
+            return SimpleNamespace(is_available=lambda: (False, "fixture outage"))
+        return real_backend(source)
+    monkeypatch.setattr(base, "get_backend", backend)
+    first = fetch(fallback=["CHIRPS_IRI"])
+    assert first.product == "CHIRPS_IRI"
+    with pytest.raises(SourceUnavailable):
+        fetch(fallback=[])
+
+
+def test_cached_result_is_rechecked_by_validator(offline):
+    from aihydro_data.exceptions import SourceUnavailable
+    first = fetch(fallback=[])
+    assert first.product == "CHIRPS"
+    seen = []
+    with pytest.raises(SourceUnavailable):
+        fetch(fallback=[], validate=lambda result: seen.append(result.cache_hit) or False)
+    assert seen and seen[0] is True
+
+
+def test_outlet_changes_cache_identity(offline):
+    first = fetch(fallback=[], outlet=(25.2, 80.2))
+    second = fetch(fallback=[], outlet=(25.8, 80.8))
+    assert first.cache_key != second.cache_key
+    assert not second.cache_hit
+
+
 def test_legacy_manifest_identity_is_unknown(offline):
     import json
     result = fetch(fallback=[])

@@ -1,5 +1,17 @@
 # Decisions
 
+## 2026-09-29 — Cache hits obey the current scientific request
+
+A cache key bound to a manually pinned primary product can hold a prior
+fallback response. Therefore every cache read checks the actual serving
+product against the *current* candidate chain, including a strict
+`fallback=[]` request. A `validate` callback applies to cache hits too;
+otherwise scientific acceptance changes with cache warmth. Outlet coordinates
+join the cache identity because reach selection can differ within one basin
+polygon. Older entries without outlet identity are not evidence of equivalence
+across outlets.
+
+
 ## 2026-09-07 — Require complete temporal support for IMERG daily integration
 
 IMERG's GEE precipitation band is a half-hourly rate in mm/hr. The previous path truncated timestamps and returned those rates as daily mm/day. The explicit `imerg_half_hourly_rate_to_daily_v1` contract integrates each rate over 0.5 h, yielding depth over each UTC day (reported under the existing mm/day convention). Date-only start/end are inclusive for this contract; other products retain their existing date handling.

@@ -1,5 +1,18 @@
 # Progress
 
+## 2026-09-29 — Cache policy and outlet identity for publication pilots
+
+- Manual strict pins now check the cached serving product against the current
+  candidate list. A caller validator is applied to cached results, and a
+  rejected cache result enters the decision trail before backend fetch.
+- Outlet coordinates now enter the cache key, preventing two outlet choices
+  for the same basin geometry from sharing a response.
+- Added offline regressions for warm fallback/strict pin, cache validator and
+  outlet identity. `/opt/miniconda3/bin/python -m pytest tests -q -m 'not live'`:
+  417 passed, 55 deselected. After core hashing changes, 14 selected data cache
+  tests passed. No live data retrieval, release or remote write.
+
+
 ## 2026-09-07 — IMERG precipitation semantics (local, uncommitted)
 
 Added explicit daily integration and completeness checks, preserved maturity status, corrected collection citations/availability and invalidated old normal-fetch cache keys. Added PROJECT.md and execution plan. Existing pipeline/cache/contracts/routing/population work remains preserved; only the schema constant/comment was changed within the pre-existing dirty pipeline file.

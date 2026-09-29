@@ -11,6 +11,11 @@ Research-grade remediation in progress; local changes are not a released validat
 - Install and usage: README.md.
 
 ## Current state
+2026-09-29 research-pilot continuation: strict manual requests validate cached
+serving products, cache hits run caller validators, and outlet changes affect
+cache identity. Local non-live suite: 417 passed, 55 deselected. See latest
+PROGRESS.md. Uncommitted, not independently validated against remote sources.
+
 IMERG rate-to-daily integration, strict temporal completeness and status reporting are implemented locally with offline regression coverage. Existing pipeline/cache/contracts/routing and population changes predate this slice and must be preserved. Baseline HEAD: 1ba148a.
 GFM synthetic fallback and misleading no-flood success paths are repaired locally; automatic scoring awaits joint validity support. CHIRPS version identity and cache/MCP propagation are implemented locally (164 selected tests). Next: joint observation/model masks, source-revision-aware cache invalidation and authenticated source validation.
 

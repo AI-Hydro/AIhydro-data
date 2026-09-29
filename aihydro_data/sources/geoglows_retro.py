@@ -48,8 +48,9 @@ log = logging.getLogger(__name__)
 _REST_ENDPOINT = "https://geoglows.ecmwf.int/api/v2"
 
 # Snap-quality thresholds (snap_uparea / target_basin_area).
-# Validated against 5 NWIS gauges (2019): correct snaps had ratio 0.99–1.04;
-# wrong snaps had ratio 0.00033–0.27 and NSE < −0.2.
+# Heuristics motivated by five selected NWIS gauges (2019), not validated
+# population thresholds. The P2 watershed study must evaluate their error and
+# accepted-coverage trade-off on independent reaches and held-out basins.
 _SNAP_RATIO_FAIL = 0.05   # below this → definitely wrong reach → raise, force fallback
 _SNAP_RATIO_WARN = 0.30   # below this → suspicious → warn but return data
 
@@ -127,8 +128,8 @@ class Backend(SourceBackend):
         river_id = snap["river_id"]
 
         # Snap-quality gate: compare snap upstream area to target basin area.
-        # Validated thresholds (2026-06-04, 5 NWIS gauges): correct snaps had ratio
-        # 0.99–1.04; bad snaps that caused >10× discharge errors had ratio 0.00–0.27.
+        # Heuristic thresholds from a five-gauge development comparison;
+        # no independent operating-characteristic validation yet.
         if target_area_km2 and snap.get("uparea_km2"):
             ratio = snap["uparea_km2"] / target_area_km2
             if ratio < _SNAP_RATIO_FAIL:

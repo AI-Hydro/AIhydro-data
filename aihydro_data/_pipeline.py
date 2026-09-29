@@ -426,23 +426,44 @@ def fetch(
         key_payload["index"] = index.upper()
     if native_resolution:
         key_payload["native_resolution"] = True
+    if req.outlet is not None:
+        # Reach/cell backends select against this point, which can differ for
+        # two requests with the same basin polygon.
+        key_payload["outlet"] = tuple(req.outlet)
     ck = _make_key(key_payload)
 
+    history: list[dict[str, str]] = []
     if cache:
         # Verify-on-read (S2): the auto-mode key is product-agnostic, so a
         # cached entry whose serving product is no longer in the current
         # candidate chain (policy changed, or a different region was detected)
         # must be treated as a MISS — never serve data a current request would
         # never have selected. Manual pins already key on the product.
-        allowed = None if (mode == "manual" and product) else [s.id for s in candidate_specs]
+        # A manual pin can still have fallbacks. A later strict request must
+        # not reuse a fallback product written under the same pinned key.
+        allowed = [s.id for s in candidate_specs]
         cached = cache_read(ck, req, allowed_products=allowed)
         if cached is not None:
-            log.debug("Cache hit for %s (%s, product=%s).", ck, variable, cached.product)
-            return cached
+            accepted = True
+            if validate is not None:
+                try:
+                    accepted = bool(validate(cached))
+                    reason = "rejected by validate()" if not accepted else ""
+                except Exception as ve:
+                    accepted = False
+                    reason = f"validate() raised: {ve}"
+                    log.warning("validate() raised for cached %r (%s); fetching again.", cached.product, ve)
+                if not accepted:
+                    history.append({
+                        "product": cached.product, "source": cached.source,
+                        "outcome": "rejected", "reason": f"cached result {reason}",
+                    })
+            if accepted:
+                log.debug("Cache hit for %s (%s, product=%s).", ck, variable, cached.product)
+                return cached
 
     # ── 5. Fetch with fallback chain ──────────────────────────────────────
     last_exc: Exception | None = None
-    history: list[dict[str, str]] = []
     for spec in candidate_specs:
         try:
             result = _fetch_one(
