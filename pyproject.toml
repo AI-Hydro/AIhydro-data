@@ -80,6 +80,7 @@ hyriver = [
     "pynhd>=0.16.0",
     "pygeohydro>=0.16.0",
     "pygridmet>=0.15.0",
+    "pydaymet>=0.16.0",   # sources/hyriver.py imports this directly for DAYMET_* products
     "py3dep>=0.15.0",
     "hydrofunctions>=0.2.0",
     "rioxarray>=0.15.0",
@@ -89,6 +90,7 @@ hyriver = [
 # Direct-API backend (sources/direct_api.py) — NWIS, GRDC, NLDI direct HTTP
 direct = [
     "hydrofunctions>=0.2.0",
+    "dataretrieval>=1.0",   # sources/direct_api.py imports this directly for NWIS_STREAMFLOW
 ]
 
 # OPeNDAP backend — auth-free data sources via IRI Data Library / Unidata
