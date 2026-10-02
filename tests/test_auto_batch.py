@@ -94,7 +94,7 @@ class TestFetchListDispatch:
         # And fetch() returned a list (empty in this fake case)
         assert isinstance(result, list)
 
-    def test_fetch_single_geometry_does_not_dispatch_to_batch(self, monkeypatch):
+    def test_fetch_single_geometry_does_not_dispatch_to_batch(self, monkeypatch, offline_backends):
         """fetch() with a single Point goes through the normal pipeline."""
         import aihydro_data._pipeline as pipeline
 
@@ -114,7 +114,7 @@ class TestFetchListDispatch:
         except Exception:
             pass    # any other error means batch was correctly skipped
 
-    def test_fetch_latlon_tuple_does_not_dispatch_to_batch(self, monkeypatch):
+    def test_fetch_latlon_tuple_does_not_dispatch_to_batch(self, monkeypatch, offline_backends):
         """A (lat, lon) tuple is a single Point, not a batch."""
         import aihydro_data._pipeline as pipeline
         def boom(*a, **kw):

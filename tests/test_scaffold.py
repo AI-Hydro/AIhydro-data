@@ -97,30 +97,30 @@ def test_get_product_missing_raises():
         aihydro_data.get_product("DEFINITELY_DOES_NOT_EXIST")
 
 
-def test_fetch_validates_and_routes():
+def test_fetch_validates_and_routes(offline_backends):
     """
     Phase 2: fetch() validates kwargs and routes through the pipeline.
 
-    In an offline / no-auth CI environment all backends are expected to fail,
-    so we accept either a successful FetchResult (live env) or a structured
-    AihydroDataError. The key assertion: fetch() must NOT raise
+    Backends are stubbed unreachable at the per-product layer (no network), so
+    the expected outcome is a structured AihydroDataError after the router has
+    tried its candidate chain. The key assertion: fetch() must NOT raise
     NotImplementedError anymore — the pipeline is wired.
     """
     from aihydro_data.exceptions import AihydroDataError
     try:
-        result = aihydro_data.fetch(
+        aihydro_data.fetch(
             variable="precipitation",
             geometry=(40.0, -85.0),
             start="2015-01-01",
             end="2015-12-31",
         )
-        # Live environment — result shape is valid
-        assert result.variable == "precipitation"
-        assert result.product in {"GRIDMET_PRECIP", "DAYMET_PRECIP", "CHIRPS", "MSWEP", "ERA5L_PRECIP"}
+        pytest.fail("fetch() returned a result although every backend is stubbed unreachable")
     except AihydroDataError:
-        pass  # Expected in offline / no-auth CI
+        pass  # structured failure from the wired pipeline
     except Exception as exc:
         pytest.fail(f"fetch() raised unexpected {type(exc).__name__}: {exc}")
+    # Routing really happened: the router tried at least one product.
+    assert offline_backends, "fetch() never reached the per-product backend layer"
 
 
 def test_geometry_coercion_point_tuple():

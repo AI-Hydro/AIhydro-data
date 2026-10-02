@@ -298,7 +298,7 @@ class TestIterGeometries:
 # ── fetch_batch (mocked backends) ────────────────────────────────────────
 
 class TestFetchBatch:
-    def test_batch_returns_expected_structure(self):
+    def test_batch_returns_expected_structure(self, offline_backends):
         """fetch_batch returns results/errors/labels dict even when all backends fail."""
         from aihydro_data.exceptions import AihydroDataError
         from aihydro_data._pipeline import fetch_batch
