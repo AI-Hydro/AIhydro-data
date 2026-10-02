@@ -143,6 +143,7 @@ def test_old_native_rate_cache_is_not_reused(tmp_path, monkeypatch):
     cache.cache_write(old, geom_wkt=geometry.wkt)
     calls = fake_ee(monkeypatch, native())
     monkeypatch.setattr(Backend, "is_available", lambda self: (True, None))
+    monkeypatch.setattr(Backend, "_assert_available", lambda self: None)
     result = _pipeline.fetch("precipitation", geometry, request.start, request.end,
                              mode="manual", product="IMERG_PRECIP", fallback=[],
                              aggregation="basin_mean", region="global")
