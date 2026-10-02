@@ -1,5 +1,23 @@
 # Decisions
 
+## 2026-10-02 — Cache key uses the canonical geometry id, not WKT
+
+WKT encodes ring start vertex and direction, so the same polygon delivered by
+two delineators (or re-serialised) missed the cache, and two spellings of one
+place carried no shared identity. The key now uses `aihydro.geom/1`
+(`aihydro_core.records.place.geometry_id`), the same algorithm that identifies a
+basin realisation in the watershed layer; aihydro-data only consumes it
+(ADR-003 amendment). Distinct outlets still separate keys (the 2026-09-29
+rule is unchanged).
+
+Bump result schema 4->5 so pre-slice entries miss rather than being aliased;
+nothing is rewritten, and orphaned entries are safe to delete. A geometry that
+cannot be identified raises `GeometryInvalid` instead of falling back to WKT, so
+the key can never silently mix two identity schemes. The algorithm quantises at
+1e-6 deg; two polygons that differ by less than that share a key by design.
+`GaugeID` gains a `scheme` so a non-USGS station id is no longer assumed to be
+inside CONUS.
+
 ## 2026-09-29 — Cache hits obey the current scientific request
 
 A cache key bound to a manually pinned primary product can hold a prior

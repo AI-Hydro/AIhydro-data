@@ -19,39 +19,91 @@ class GaugeID:
     pipeline can pass it through routing/caching without special-casing
     every call site:
 
-        - .wkt              → "GAUGE_ID(<id>)"  (stable cache-key fragment)
+        - .wkt              → "GAUGE_ID(<id>)" for the default usgs scheme,
+                              "GAUGE_ID(<scheme>:<id>)" otherwise
         - .bounds           → None (signals to detect_region() to fall back)
         - .geom_type        → "GaugeID"
         - .__repr__         → human-readable for logs
         - .id               → the raw string
+        - .scheme           → id namespace ("usgs" by default). Only "usgs"
+                              routes to CONUS; any other scheme routes global.
 
     Backends that want station IDs check ``isinstance(geom, GaugeID)`` or
     inspect ``.geom_type``; backends that need a real geometry refuse with
     a clear error.
     """
-    __slots__ = ("id",)
+    __slots__ = ("id", "scheme")
     geom_type = "GaugeID"
     bounds = None
 
-    def __init__(self, ident: str) -> None:
+    def __init__(self, ident: str, scheme: str = "usgs") -> None:
         self.id = str(ident).strip()
+        self.scheme = str(scheme).strip().lower()
 
     @property
     def wkt(self) -> str:
-        return f"GAUGE_ID({self.id})"
+        if self.scheme == "usgs":
+            return f"GAUGE_ID({self.id})"
+        return f"GAUGE_ID({self.scheme}:{self.id})"
 
     @property
     def centroid(self):  # noqa: D401 — duck-type signal for detect_region
         return None
 
     def __repr__(self) -> str:
-        return f"GaugeID({self.id!r})"
+        if self.scheme == "usgs":
+            return f"GaugeID({self.id!r})"
+        return f"GaugeID({self.id!r}, scheme={self.scheme!r})"
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, GaugeID) and self.id == other.id
+        return (
+            isinstance(other, GaugeID)
+            and self.id == other.id
+            and self.scheme == other.scheme
+        )
 
     def __hash__(self) -> int:
-        return hash(("GaugeID", self.id))
+        return hash(("GaugeID", self.scheme, self.id))
+
+
+def geometry_id(geom: Any) -> str:
+    """
+    Canonical geometry identity (``aihydro.geom/1``) of a coerced geometry.
+
+    Delegates to ``aihydro_core.records.place.geometry_id``; this function only
+    converts the shapely object (or GaugeID) to the GeoJSON-like mapping that
+    function takes. Ring start/direction and hole order do not change the id;
+    distinct outlets/polygons do. Raises GeometryInvalid (never falls back to
+    WKT) for geometries the algorithm cannot identify.
+    """
+    from aihydro_core.records.place import PlaceIdentityError
+    from aihydro_core.records.place import geometry_id as _core_geometry_id
+
+    from aihydro_data.exceptions import GeometryInvalid
+
+    try:
+        if isinstance(geom, GaugeID):
+            mapping = {"type": "GaugeID", "scheme": geom.scheme, "id": geom.id}
+        else:
+            from shapely.geometry import mapping as _mapping
+            mapping = _mapping(geom)
+        return _core_geometry_id(mapping)
+    except PlaceIdentityError as exc:
+        raise GeometryInvalid(
+            code=exc.code,
+            message=f"Cannot derive a geometry identity: {exc}",
+            recovery="Pass a Point, MultiPoint, Polygon, MultiPolygon or GaugeID with valid, non-degenerate coordinates.",
+            next_tools=["data_help"],
+        ) from exc
+    except GeometryInvalid:
+        raise
+    except Exception as exc:
+        raise GeometryInvalid(
+            code="GEOMETRY_ID_FAILED",
+            message=f"Cannot derive a geometry identity from {type(geom).__name__}: {exc}",
+            recovery="Pass a valid shapely geometry or GaugeID.",
+            next_tools=["data_help"],
+        ) from exc
 
 
 def coerce_geometry(geom: Any) -> Any:

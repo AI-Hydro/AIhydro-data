@@ -48,6 +48,7 @@ class ManifestEntry:
         aggregation_actual: str = "",
         product_identity: dict[str, Any] | None = None,
         fallback_history: list[dict[str, str]] | None = None,
+        geom_id: str | None = None,
     ) -> None:
         self.cache_key = cache_key
         self.variable = variable
@@ -67,6 +68,8 @@ class ManifestEntry:
         self.aggregation_actual = aggregation_actual
         self.product_identity = product_identity or {}
         self.fallback_history = fallback_history or []
+        # aihydro.geom/1 id; absent on entries written before result_schema 5.
+        self.geom_id = geom_id
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -88,6 +91,7 @@ class ManifestEntry:
             "aggregation_actual": self.aggregation_actual,
             "product_identity": self.product_identity,
             "fallback_history": self.fallback_history,
+            "geom_id": self.geom_id,
         }
 
     @classmethod
@@ -111,6 +115,7 @@ class ManifestEntry:
             aggregation_actual=d.get("aggregation_actual", ""),
             product_identity=d.get("product_identity", {}),
             fallback_history=d.get("fallback_history", []),
+            geom_id=d.get("geom_id"),
         )
 
 

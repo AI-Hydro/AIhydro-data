@@ -406,7 +406,12 @@ def fetch(
     # backend served it. In manual mode the product is included so users
     # who pin a product don't accidentally pick up another product's data.
     from aihydro_data.cache import cache_key as _make_key, cache_read, cache_write
+    # Local only: stored in the manifest so cache_read can rebuild a request.
+    # It is NOT part of the key; the key uses the canonical geometry id so ring
+    # start/direction and hole order do not split the cache.
     geom_wkt = geom.wkt
+    from aihydro_data.geometry import geometry_id as _geometry_id
+    geom_id = _geometry_id(geom)   # raises GeometryInvalid; no WKT fallback
     key_payload: dict[str, Any] = {
         # Contract schema version. Bump whenever FetchResult gains a field that
         # carries meaning rather than convenience, so entries written under the
@@ -418,7 +423,8 @@ def fetch(
         "start": start,
         "end": end,
         "aggregation": aggregation,
-        "geom_wkt": geom_wkt,
+        "geom_id": geom_id,
+        "geom_key": "aihydro.geom/1",
     }
     if mode == "manual" and product:
         key_payload["product"] = product
@@ -460,7 +466,7 @@ def fetch(
                     })
             if accepted:
                 log.debug("Cache hit for %s (%s, product=%s).", ck, variable, cached.product)
-                return cached
+                return cached.model_copy(update={"geometry_id": geom_id})
 
     # ── 5. Fetch with fallback chain ──────────────────────────────────────
     last_exc: Exception | None = None
@@ -495,7 +501,8 @@ def fetch(
                 "product": spec.id, "source": spec.source,
                 "outcome": "served", "reason": "",
             })
-            _update = {"cache_key": ck, "fallback_history": history}
+            _update = {"cache_key": ck, "fallback_history": history,
+                       "geometry_id": geom_id}
             if _pin_promoted:
                 _update["notes"] = list(result.notes) + [
                     f"product={product!r} was pinned without mode='manual'; the "
@@ -509,7 +516,7 @@ def fetch(
             # product-agnostic in auto mode.
             if cache:
                 try:
-                    cache_write(result, geom_wkt=geom_wkt)
+                    cache_write(result, geom_wkt=geom_wkt, geom_id=geom_id)
                 except Exception as ce:
                     log.debug("Cache write failed (non-fatal): %s", ce)
             return result
@@ -568,7 +575,7 @@ class _EmptyResult(Exception):
 #           coverage_start/end, coverage_complete, days_missing_head/tail
 # v3 invalidates cached native IMERG rates previously labelled as daily totals.
 # v4 records product identity and avoids old CHIRPS citation metadata.
-RESULT_SCHEMA_VERSION = 4
+RESULT_SCHEMA_VERSION = 5
 
 # Per-variable cache revisions. A fix that changes what one variable serves
 # bumps only that variable's entry, so its old cache entries stop matching

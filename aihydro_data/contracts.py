@@ -174,6 +174,10 @@ class FetchResult(BaseModel):
     )
     cache_key: str = ""
     cache_hit: bool = False
+    # Canonical identity of the request geometry (aihydro.geom/1, "sha256:...").
+    # Set on every result the pipeline returns; None only for results built
+    # outside fetch() or restored from a pre-schema-5 manifest.
+    geometry_id: Optional[str] = None
 
     # The actual data — pd.DataFrame for time series, xr.DataArray for rasters
     data: Any

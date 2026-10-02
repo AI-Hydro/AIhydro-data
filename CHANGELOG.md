@@ -3,6 +3,32 @@
 All notable changes to `aihydro-data` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed — cache identity uses the canonical geometry id (slice 3 / P2)
+
+- The fetch cache key no longer hashes `geom.wkt`. It hashes `geom_id`
+  (`aihydro.geom/1`, from `aihydro_core.records.place.geometry_id`) plus
+  `geom_key="aihydro.geom/1"`. Ring start vertex, ring direction, duplicate
+  closing points and hole order no longer split the cache. Distinct polygons
+  and distinct `outlet=` values still produce distinct keys.
+- `RESULT_SCHEMA_VERSION` 4 -> 5. **One-time cache invalidation:** every entry
+  written before this release misses once and is refetched. Nothing is
+  rewritten or deleted; the old `*.parquet|*.nc` + `*.manifest.json` files are
+  orphaned and can be safely deleted by hand (`~/.aihydro/cache/` or your
+  configured cache dir) to reclaim space.
+- `FetchResult.geometry_id` (`str | None`) is set on every result `fetch()`
+  returns, including cache hits.
+- Cache manifests gain an optional `geom_id`; `geom_wkt` is kept (used by
+  `cache_read` to rebuild a request). Legacy manifests without `geom_id` still
+  read, with `geometry_id=None`.
+- `GaugeID(ident, scheme="usgs")`. Only `usgs` routes to CONUS; any other
+  scheme routes `global`. `GaugeID.wkt` is unchanged for `usgs`.
+- New `aihydro_data.geometry.geometry_id(geom)`. Geometries the algorithm cannot
+  identify (LineString, GeometryCollection, degenerate polygon) raise
+  `GeometryInvalid`; there is no silent fallback to WKT.
+- Requires `aihydro-core>=0.2.3`.
+
 ---
 
 ## [0.2.1] — 2026-06-25

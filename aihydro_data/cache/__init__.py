@@ -173,6 +173,7 @@ def cache_read(
         fetched_at=manifest.fetched_at,
         cache_key=ck,
         cache_hit=True,
+        geometry_id=getattr(manifest, "geom_id", None),
         data=data,
         license=manifest.license,
         citation=manifest.citation,
@@ -186,7 +187,7 @@ def cache_read(
 
 # ── Write ─────────────────────────────────────────────────────────────────
 
-def cache_write(result: "FetchResult", geom_wkt: str = "") -> None:
+def cache_write(result: "FetchResult", geom_wkt: str = "", geom_id: str = "") -> None:
     """
     Persist a FetchResult to disk and write its manifest sidecar.
 
@@ -272,6 +273,7 @@ def cache_write(result: "FetchResult", geom_wkt: str = "") -> None:
         start=result.request.start,
         end=result.request.end,
         geom_wkt=geom_wkt or getattr(result.request, "_geom_wkt", ""),
+        geom_id=geom_id or getattr(result, "geometry_id", None) or None,
         aggregation=result.request.aggregation,
         fetched_at=result.fetched_at,
         license=result.license,

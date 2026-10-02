@@ -31,9 +31,10 @@ def detect_region(geometry: Any) -> str:
     "AFRICA", "S_ASIA", "ASIA", "OCEANIA", "global".
     """
     # Non-geometric identifiers (GaugeID for NWIS, etc.) bypass spatial
-    # detection. NWIS is CONUS-only; GRDC (future) would route differently.
+    # detection. Only the usgs scheme (NWIS) is CONUS-only; any other scheme
+    # (GRDC, camels, ...) is not known to be inside CONUS, so route global.
     if getattr(geometry, "geom_type", None) == "GaugeID":
-        return "CONUS"
+        return "CONUS" if getattr(geometry, "scheme", "usgs") == "usgs" else "global"
 
     try:
         # shapely .bounds → (minx, miny, maxx, maxy) = (min_lon, min_lat, max_lon, max_lat)
