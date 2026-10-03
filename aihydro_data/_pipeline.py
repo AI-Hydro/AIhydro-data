@@ -583,7 +583,7 @@ RESULT_SCHEMA_VERSION = 5
 #   impervious 1: NLCD_IMPERVIOUS used to return land-cover class codes
 #                 instead of percent impervious (fixed 2026-09-29).
 #   streamflow 1: results used to be labelled with the product-spec unit even
-#                 when the payload declared another (GEOGLOWS: ft3/s); they now
+#                 when the payload declared another spelling or unit; they now
 #                 record the declared unit and `units_spec` (2026-10-03).
 #   dem 1:        small CONUS requests now route to 3DEP 10 m before GLO-30
 #                 (2026-09-29); old GLO-30 entries for them must not be reused.

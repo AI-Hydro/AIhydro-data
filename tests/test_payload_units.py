@@ -2,7 +2,7 @@
 
 Synthetic payloads only. Before this change the pipeline labelled every series with
 the product spec's unit and never read the payload's (GEOGLOWS: the zarr declares
-ft3/s, the result said m3/s). Recording is neutral: no conversion, warning or refusal.
+`m3 s-1`, the result said the spec's `m3/s`). The ft3/s values below are synthetic stand-ins for a provider whose declared unit differs. Recording is neutral: no conversion, warning or refusal.
 """
 from __future__ import annotations
 
@@ -123,7 +123,7 @@ def test_geoglows_adapter_reads_the_zarr_variable_unit(monkeypatch):
     def retro_daily(river_id, format="df", **kw):
         if format == "xarray":
             q = xr.DataArray([[1.0], [2.0], [3.0]], dims=("time", "river_id"),
-                             coords={"time": times, "river_id": [river_id]}, attrs={"units": "ft3/s"})
+                             coords={"time": times, "river_id": [river_id]}, attrs={"units": "m3 s-1"})
             return xr.Dataset({"Q": q})
         idx = pd.DatetimeIndex(times).tz_localize("UTC")
         return pd.DataFrame({river_id: [1.0, 2.0, 3.0]}, index=idx)
@@ -134,4 +134,23 @@ def test_geoglows_adapter_reads_the_zarr_variable_unit(monkeypatch):
     monkeypatch.setattr(be, "_snap", lambda *a, **k: {"river_id": 7, "strategy": "t", "uparea_km2": None})
     df = be.fetch_timeseries(get_product("GEOGLOWS_RETRO"), Point(-71.0, 41.0), "2020-01-01", "2020-01-03",
                              "basin_mean", outlet=(41.0, -71.0))
-    assert df.attrs["aihydro_units"] == "ft3/s" and len(df) == 3
+    assert df.attrs["aihydro_units"] == "m3 s-1" and len(df) == 3
+
+
+@pytest.mark.parametrize("bad", [
+    "x" * 65, "m3/s\x1b[31m", "m3\n/s", "m3\x00/s", "/etc/passwd", "~/secret", "../../x", "C:\\Users\\x",
+    "https://evil.example/units", "", "  ", "none", "NaN", "Unknown",
+])
+def test_declare_units_rejects_hostile_or_empty_strings(bad):
+    df = pd.DataFrame({"a": [1]})
+    assert "aihydro_units" not in declare_units(df, bad).attrs
+
+
+@pytest.mark.parametrize("good", ["m3 s-1", "m3/s", "m\u00b3/s", "mm d-1", "\u00b0C", "kg m-2 s-1", "x" * 64])
+def test_declare_units_accepts_real_spellings(good):
+    assert declare_units(pd.DataFrame({"a": [1]}), good).attrs["aihydro_units"] == good
+
+
+def test_rejected_unit_is_treated_as_not_declared_end_to_end(monkeypatch):
+    r = _serve(monkeypatch, "GEOGLOWS_RETRO", _df("/etc/passwd"))
+    assert (r.units, r.units_spec, r.units_declared) == ("m3/s", "m3/s", "")

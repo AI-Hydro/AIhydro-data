@@ -8,13 +8,18 @@ consistent (same code/recovery/next_tools shape) across every backend.
 from __future__ import annotations
 
 import importlib
+import logging
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 
 #: Attribute under which a backend reports the unit its payload declared for the
 #: values it returned (``DataFrame.attrs`` / ``DataArray.attrs``). The pipeline
 #: records it as the result's ``units``.
 DECLARED_UNITS_ATTR = "aihydro_units"
+#: Longest provider-declared unit string accepted (real units are well under 30).
+MAX_DECLARED_UNITS_LEN = 64
 
 
 def declare_units(obj: Any, declared: Any) -> Any:
@@ -23,10 +28,28 @@ def declare_units(obj: Any, declared: Any) -> Any:
     Call only with a unit the payload itself carries, and only when the values
     returned are in that unit (a backend that converts must not declare the
     pre-conversion unit).
+
+    The string comes from a remote provider, so it is checked on the way in. It
+    is dropped, as if the payload declared nothing (debug-logged), when it is
+    empty, one of ``none`` / ``nan`` / ``unknown`` (any case), longer than
+    ``MAX_DECLARED_UNITS_LEN`` characters, contains a non-printable character
+    (control characters, ESC, newlines), or looks like a path or URL (leading
+    ``/`` or ``~``, ``..``, a backslash, ``://``).
     """
     text = str(declared).strip() if declared is not None else ""
-    if text and text.lower() not in {"none", "nan", "unknown"}:
-        obj.attrs[DECLARED_UNITS_ATTR] = text
+    if not text or text.lower() in {"none", "nan", "unknown"}:
+        return obj
+    reason = None
+    if len(text) > MAX_DECLARED_UNITS_LEN:
+        reason = f"longer than {MAX_DECLARED_UNITS_LEN} characters"
+    elif not text.isprintable():
+        reason = "contains non-printable characters"
+    elif text[0] in "/~" or ".." in text or "\\" in text or "://" in text:
+        reason = "looks like a path or URL"
+    if reason:
+        log.debug("declared unit rejected (%s); treated as not declared: %r", reason, text[:80])
+        return obj
+    obj.attrs[DECLARED_UNITS_ATTR] = text
     return obj
 
 

@@ -9,7 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `_fetch_one` labelled every result with the product spec's unit (`units=spec.units`,
   `product_identity.units`) and never read the payload's. The GEOGLOWS retrospective
-  zarr declares its discharge variable in ft3/s while the result said m3/s.
+  zarr declares its discharge variable as `m3 s-1` (geoglows 2.2.0) while the result said the spec's `m3/s`; the general defect is that a declared unit was never read.
 - Backends now report a payload-declared unit through `df.attrs["aihydro_units"]`
   (`sources/_common.py`: `declare_units`, `payload_units`); the pipeline records it as
   `FetchResult.units`, keeps the spec unit as new `units_spec`, and the payload's own
