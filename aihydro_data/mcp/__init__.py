@@ -104,6 +104,8 @@ def _result_to_dict(result: Any) -> dict[str, Any]:
         "source": result.source,
         "product_identity": getattr(result, "product_identity", {}),
         "units": getattr(result, "units", ""),
+        "units_spec": getattr(result, "units_spec", ""),
+        "units_declared": getattr(result, "units_declared", ""),
         "timestep": getattr(result, "timestep", ""),
         "resolution_m": getattr(result, "resolution_m", None),
         "common_pitfalls": getattr(result, "common_pitfalls", []),

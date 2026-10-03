@@ -152,6 +152,8 @@ class Backend(SourceBackend):
             "streamflow": pd.to_numeric(qvals, errors="coerce"),
         }).dropna(subset=["streamflow"]).reset_index(drop=True)
 
+        from aihydro_data.sources._common import declare_units
+        declare_units(df, (payload.get("daily_units") or {}).get("river_discharge"))
         df.attrs["openmeteo_cell"] = {"lat": lat, "lon": lon,
                                       "cell_selection": cfg.get("cell_selection", "nearest")}
 

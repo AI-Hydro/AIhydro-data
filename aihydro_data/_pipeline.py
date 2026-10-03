@@ -582,9 +582,12 @@ RESULT_SCHEMA_VERSION = 5
 # while every other variable's cache stays valid.
 #   impervious 1: NLCD_IMPERVIOUS used to return land-cover class codes
 #                 instead of percent impervious (fixed 2026-09-29).
+#   streamflow 1: results used to be labelled with the product-spec unit even
+#                 when the payload declared another (GEOGLOWS: ft3/s); they now
+#                 record the declared unit and `units_spec` (2026-10-03).
 #   dem 1:        small CONUS requests now route to 3DEP 10 m before GLO-30
 #                 (2026-09-29); old GLO-30 entries for them must not be reused.
-_VARIABLE_CACHE_REVISION: dict[str, int] = {"impervious": 1, "dem": 1}
+_VARIABLE_CACHE_REVISION: dict[str, int] = {"impervious": 1, "dem": 1, "streamflow": 1}
 
 
 def _result_schema_for(variable: str) -> int | str:
@@ -869,6 +872,15 @@ def _fetch_one(
             f"describe only the days present; absent days are not zeros."
         )
 
+    # Unit the payload itself declared (backend-reported), else the spec's.
+    spec_units = getattr(spec, "units", "") or ""
+    declared_units = ""
+    try:
+        declared_units = str(getattr(data, "attrs", {}).get("aihydro_units", "") or "").strip()
+    except Exception:
+        pass
+    units = declared_units or spec_units
+
     return FetchResult(
         **cov,
         product_identity={
@@ -877,12 +889,15 @@ def _fetch_one(
             "dataset_version": spec.dataset_version, "variant": spec.variant,
             "temporal_derivation": spec.temporal_derivation,
             "input_dependencies": list(spec.input_dependencies),
-            "units": spec.units, "timestep": spec.timestep,
+            "units": units, "units_spec": spec_units, "units_declared": declared_units,
+            "timestep": spec.timestep,
             "resolution_m": spec.resolution_m,
             "common_pitfalls": list(spec.common_pitfalls),
             "identity_basis": "configured_product", "asset_revision_verified": False,
         },
-        units=getattr(spec, "units", "") or "",
+        units=units,
+        units_spec=spec_units,
+        units_declared=declared_units,
         timestep=getattr(spec, "timestep", "") or "",
         resolution_m=getattr(spec, "resolution_m", None),
         common_pitfalls=list(getattr(spec, "common_pitfalls", []) or []),

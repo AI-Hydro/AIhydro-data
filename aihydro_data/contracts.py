@@ -205,7 +205,14 @@ class FetchResult(BaseModel):
     # Kelvin where DAYMET reports Celsius. `common_pitfalls` carries the served product's own
     # warnings (e.g. "Native units are Kelvin; subtract 273.15") to the point
     # of use instead of leaving them in the registry.
+    # `units` is what the values are in: the unit the provider's payload declared
+    # when it declared one, else the product spec's. `units_spec` is always the
+    # product spec's unit; `units_declared` is the payload's own unit ("" when
+    # the payload carried none). When they differ both are recorded as they are:
+    # nothing is converted, warned about or refused here.
     units: str = ""
+    units_spec: str = ""
+    units_declared: str = ""
     timestep: str = ""
     resolution_m: Optional[float] = None
     common_pitfalls: list[str] = Field(default_factory=list)

@@ -139,6 +139,8 @@ class Backend(SourceBackend):
                 "date": times,
                 "streamflow": series.values.astype(float).ravel(),
             })
+            from aihydro_data.sources._common import payload_units
+            declared_unit = payload_units(getattr(series, "attrs", {}))
         finally:
             try:
                 ds.close()
@@ -151,6 +153,8 @@ class Backend(SourceBackend):
 
         # Stash snap provenance so the pipeline/notes can surface it.
         df.attrs["glofas_snap"] = snap
+        from aihydro_data.sources._common import declare_units
+        declare_units(df, declared_unit)
         log.info(
             "GloFAS snapped (%.3f, %.3f) → cell (%.3f, %.3f) via %s; "
             "uparea=%s km² vs basin=%s km²; mean Q=%.1f m³/s",

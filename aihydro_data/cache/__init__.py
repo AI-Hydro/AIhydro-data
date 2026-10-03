@@ -132,12 +132,13 @@ def cache_read(
     # the existing registry fallback for units/support, but version identity
     # remains unknown rather than being invented from today's ProductSpec.
     _units = _timestep = ""
+    _units_spec = _units_declared = ""
     _res_m = None
     _pitfalls: list[str] = []
     try:
         from aihydro_data.products import get_product
         _spec = get_product(manifest.product)
-        _units = getattr(_spec, "units", "") or ""
+        _units = _units_spec = getattr(_spec, "units", "") or ""
         _timestep = getattr(_spec, "timestep", "") or ""
         _res_m = getattr(_spec, "resolution_m", None)
         _pitfalls = list(getattr(_spec, "common_pitfalls", []) or [])
@@ -146,6 +147,8 @@ def cache_read(
 
     if manifest.product_identity:
         _units = manifest.product_identity.get("units", _units)
+        _units_spec = manifest.product_identity.get("units_spec", _units_spec)
+        _units_declared = manifest.product_identity.get("units_declared", "")
         _timestep = manifest.product_identity.get("timestep", _timestep)
         _res_m = manifest.product_identity.get("resolution_m", _res_m)
         _pitfalls = manifest.product_identity.get("common_pitfalls", _pitfalls)
@@ -163,6 +166,8 @@ def cache_read(
         product_identity=manifest.product_identity,
         fallback_history=manifest.fallback_history,
         units=_units,
+        units_spec=_units_spec,
+        units_declared=_units_declared,
         timestep=_timestep,
         resolution_m=_res_m,
         common_pitfalls=_pitfalls,

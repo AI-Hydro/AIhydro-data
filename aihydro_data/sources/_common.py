@@ -11,6 +11,37 @@ import importlib
 from typing import Any
 
 
+#: Attribute under which a backend reports the unit its payload declared for the
+#: values it returned (``DataFrame.attrs`` / ``DataArray.attrs``). The pipeline
+#: records it as the result's ``units``.
+DECLARED_UNITS_ATTR = "aihydro_units"
+
+
+def declare_units(obj: Any, declared: Any) -> Any:
+    """Record the provider-declared unit of ``obj``'s values; no-op for an empty one.
+
+    Call only with a unit the payload itself carries, and only when the values
+    returned are in that unit (a backend that converts must not declare the
+    pre-conversion unit).
+    """
+    text = str(declared).strip() if declared is not None else ""
+    if text and text.lower() not in {"none", "nan", "unknown"}:
+        obj.attrs[DECLARED_UNITS_ATTR] = text
+    return obj
+
+
+def payload_units(attrs: Any) -> str:
+    """The unit named by a payload attribute mapping (``units`` / ``unit``), or ""."""
+    try:
+        for key in ("units", "unit", "Units"):
+            v = attrs.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+    except Exception:
+        pass
+    return ""
+
+
 def require_import(module: str, *, extra: str, backend: str = "") -> Any:
     """Import `module`, or raise SourceUnavailable pointing at the pip extra.
 

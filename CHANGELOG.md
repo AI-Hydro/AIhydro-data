@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — recorded `units` are the provider-declared unit when the payload declares one
+
+- `_fetch_one` labelled every result with the product spec's unit (`units=spec.units`,
+  `product_identity.units`) and never read the payload's. The GEOGLOWS retrospective
+  zarr declares its discharge variable in ft3/s while the result said m3/s.
+- Backends now report a payload-declared unit through `df.attrs["aihydro_units"]`
+  (`sources/_common.py`: `declare_units`, `payload_units`); the pipeline records it as
+  `FetchResult.units`, keeps the spec unit as new `units_spec`, and the payload's own
+  as new `units_declared` (empty when the payload carried none, in which case behaviour
+  is unchanged). When they differ both are recorded as they are: no conversion, note,
+  warning or refusal. `product_identity` and the cache manifest carry all three.
+- Adapters wired: GEOGLOWS retro (zarr `Q` unit), Open-Meteo Flood (`daily_units`),
+  GloFAS (netCDF variable `units`). NWIS converts cfs to m3/s in the adapter, so it
+  declares nothing. Other backends (GEE, STAC, HyRiver rasters) are unchanged.
+- Per-variable cache revision `streamflow: 1`: cached streamflow entries written before
+  the fix carry the spec unit and are not reused. `data_fetch` results expose
+  `units_spec` and `units_declared`. Test: `tests/test_payload_units.py`.
+
 ### Changed — cache identity uses the canonical geometry id (slice 3 / P2)
 
 - The fetch cache key no longer hashes `geom.wkt`. It hashes `geom_id`

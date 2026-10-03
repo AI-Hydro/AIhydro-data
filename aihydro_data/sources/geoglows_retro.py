@@ -180,6 +180,15 @@ class Backend(SourceBackend):
                 (df["date"] <= pd.Timestamp(end))].reset_index(drop=True)
 
         df.attrs["geoglows_snap"] = snap
+        # The zarr's own unit for the discharge variable. retro_daily's DataFrame
+        # form drops variable attributes, so read them from the xarray form.
+        from aihydro_data.sources._common import declare_units, payload_units
+        declared = ""
+        try:
+            declared = payload_units(geoglows.data.retro_daily(river_id, format="xarray")["Q"].attrs)
+        except Exception as exc:
+            log.debug("GEOGLOWS: payload unit not readable (%s); product-spec unit applies.", exc)
+        declare_units(df, declared)
         log.info(
             "GEOGLOWS snapped (%.3f, %.3f) → reach %s via %s; uparea=%s km² "
             "vs basin=%s km²; mean Q=%.1f m³/s over %d days",
