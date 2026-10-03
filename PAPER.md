@@ -274,7 +274,7 @@ GeoDataFrame, GeoJSON dict, shapely geometry, `(lat,lon)`, bbox, WKT, and a
 
 ## 4. Implementation Summary (current release)
 
-- **Version:** 0.2.1 (metadata repair release; first public PyPI feature release was 0.2.0)
+- **Version:** 0.2.2 (provider-declared units; precipitation fill-value masking and physical-range backstop; 0.2.1 was the metadata repair release; first public PyPI feature release was 0.2.0)
 - **Products:** 57 across 19 variables — precipitation (6), tmax (4), tmin (4),
   tmean (1), pet (4), et (3), dem (6), landcover (4), soil (2), soil_moisture (1),
   ndvi (2), lai (1), optical (5), streamflow (4), flood_inundation (1), geology (3),
