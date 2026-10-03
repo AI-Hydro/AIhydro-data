@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed - provider fill values are never served as data (D4)
+
+- `CHIRPS_IRI` averaged raw OPeNDAP cell values, so a ~1e33 fill value became
+  basin-mean "precipitation" (e2e proof 2: runoff_ratio 2.3e-33). It now masks
+  declared `_FillValue` / `missing_value`, non-finite and impossible cells
+  BEFORE the spatial mean, and raises `CHIRPS_IRI_ALL_MASKED` when nothing
+  valid is left.
+- New `aihydro_data/_physical.py` (`mask_invalid`, `declared_fill_values`,
+  `enforce_physical_range`, `PHYSICAL_BOUNDS`: engineering bounds, source to
+  verify). The pipeline applies it to every backend's result as a backstop
+  (precipitation, PET, tmax/tmin, soil moisture; units matched against the
+  spec): masked values become NaN with a note on the result, and a candidate
+  with nothing finite left fails so the fallback chain continues.
+- Audit: GEE reducers respect the image mask; hyriver (GridMET/Daymet) and
+  Open-Meteo return NaN/None for missing; all now also pass through the
+  backstop. Products with no entry in `PHYSICAL_BOUNDS` are masked only for
+  non-finite values.
+
 ### Fixed — recorded `units` are the provider-declared unit when the payload declares one
 
 - `_fetch_one` labelled every result with the product spec's unit (`units=spec.units`,

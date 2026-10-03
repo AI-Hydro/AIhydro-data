@@ -851,6 +851,26 @@ def _fetch_one(
             f"{spec.id!r} returned no usable data for {start}..{end}."
         )
 
+    # ── Physical-validity gate (D4) ───────────────────────────────────────────
+    # Backstop for every backend: provider fill values, non-finite and
+    # physically impossible values are masked to NaN (never served as data).
+    # If nothing finite is left the candidate fails and the chain continues.
+    from aihydro_data._physical import enforce_physical_range
+    data, _n_masked = enforce_physical_range(spec, data)
+    if _n_masked:
+        try:
+            data.attrs["aihydro_notes"] = list(data.attrs.get("aihydro_notes", [])) + [
+                f"{_n_masked} value(s) masked as missing: fill value, non-finite or outside "
+                f"the physical range for {spec.variable} [{spec.units}]."
+            ]
+        except Exception:
+            pass
+        if not _has_signal(data):
+            raise _EmptyResult(
+                f"{spec.id!r}: every value was a fill value or physically impossible "
+                f"({_n_masked} masked); nothing usable for {start}..{end}."
+            )
+
     # Harvest backend-attached caveats (e.g. "polygon mask failed") so
     # degradations surface on the result instead of dying in debug logs.
     notes: list[str] = []

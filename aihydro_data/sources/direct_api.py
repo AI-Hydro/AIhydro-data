@@ -361,8 +361,21 @@ class Backend(SourceBackend):
                     time_dim: slice(start_jd, end_jd),
                 }
             )
-            # Spatial mean, then pull data from server
-            vals: np.ndarray = sub.mean(dim=[lon_dim, lat_dim]).load().values
+            # Mask fill / non-finite / impossible values PER CELL, then take the
+            # spatial mean over what is left. After averaging a fill value is
+            # indistinguishable from data (D4: a ~1e33 fill became "precipitation").
+            from aihydro_data._physical import (
+                bounds_for, declared_fill_values, mask_invalid,
+            )
+            cells = sub.load()
+            masked, n_masked = mask_invalid(
+                cells.values,
+                fill_values=declared_fill_values(ds[varname].attrs, ds[varname].encoding),
+                bounds=bounds_for("precipitation", "mm/day"),
+            )
+            if n_masked:
+                log.warning("CHIRPS_IRI: masked %d fill/non-finite/impossible cell values.", n_masked)
+            vals: np.ndarray = cells.copy(data=masked).mean(dim=[lon_dim, lat_dim]).values
         except Exception as exc:
             ds.close()
             raise SourceUnavailable(
@@ -377,6 +390,19 @@ class Backend(SourceBackend):
                 ds.close()
             except Exception:
                 pass
+
+        if len(vals) > 0 and not np.isfinite(vals).any():
+            raise SourceUnavailable(
+                code="CHIRPS_IRI_ALL_MASKED",
+                message=(
+                    "CHIRPS IRI returned only fill / non-finite / impossible values for "
+                    "this geometry and window (e.g. ocean or out-of-coverage cells); "
+                    "refusing to serve them as precipitation."
+                ),
+                recovery="Use GEE CHIRPS (product='CHIRPS') or another precipitation product.",
+                next_tools=["data_doctor"],
+                docs_anchor="products#chirps-iri",
+            )
 
         if len(vals) == 0:
             import pandas as pd
