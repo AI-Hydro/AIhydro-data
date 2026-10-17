@@ -258,11 +258,13 @@ def cache_read(
 
 # ── Write ─────────────────────────────────────────────────────────────────
 
-def cache_write(result: "FetchResult", geom_wkt: str = "", geom_id: str = "") -> None:
+def cache_write(result: "FetchResult", geom_wkt: str = "", geom_id: str = "") -> Optional[str]:
     """
     Persist a FetchResult to disk and write its manifest sidecar.
 
-    Skips silently on any IO error (cache is best-effort).
+    Skips silently on any IO error (cache is best-effort). Returns the sha256 of
+    the cached data file, or None when nothing was cached. An entry whose hash
+    cannot be computed is NOT kept (it could not be verified on read).
     """
     from aihydro_data.cache.manifest import ManifestEntry, write_manifest
 
@@ -336,11 +338,15 @@ def cache_write(result: "FetchResult", geom_wkt: str = "", geom_id: str = "") ->
         log.warning("Cache write failed for %s: %s", ck, exc)
         return
 
-    sha = None
     try:
         sha = file_sha256(Path(data_file))
-    except Exception as exc:      # best-effort: no hash -> read-side check is skipped
-        log.debug("could not hash %s: %s", data_file, exc)
+    except Exception as exc:
+        log.warning("Cache write for %s dropped: cannot hash %s (%s).", ck, data_file, exc)
+        try:
+            Path(data_file).unlink()
+        except OSError:
+            pass
+        return None
     entry = ManifestEntry(
         cache_key=ck,
         variable=result.variable,
@@ -370,6 +376,8 @@ def cache_write(result: "FetchResult", geom_wkt: str = "", geom_id: str = "") ->
         write_manifest(d, entry)
     except Exception as exc:
         log.warning("Manifest write failed for %s: %s", ck, exc)
+        return None
+    return sha
 
 
 # ── Invalidate ────────────────────────────────────────────────────────────

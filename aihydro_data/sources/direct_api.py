@@ -102,7 +102,17 @@ def _legacy_waterservices_daily(site: str, start: str, end: str, param_cd: str, 
     bad = sorted({t for ts in tokens for t in ts} - {"A", "P", "e"})
     if bad or any(not ({"A", "P"} & ts) for ts in tokens):
         raise uw._err("USGS_APPROVAL_UNKNOWN", f"legacy qualifier codes not understood: {bad or 'missing A/P'}")
-    val = pd.to_numeric(df[qc], errors="coerce")
+    raw = df[qc]
+    # Same rules as the Water Data path: no silent coercion, the -999999 sentinel is refused,
+    # non-finite values are refused. Genuine missing (NaN/None) stays missing and is counted.
+    parsed = []
+    for i, v in enumerate(raw):
+        if v is None or (isinstance(v, float) and v != v) or v is pd.NA:
+            parsed.append(float("nan"))
+        else:
+            parsed.append(uw._parse_value(repr(float(v)) if isinstance(v, (int, float)) and not isinstance(v, bool) else v,
+                                          str(dates.iloc[i])))
+    val = pd.Series(parsed, index=raw.index, dtype="float64")
     out = pd.DataFrame({
         "date": dates, "streamflow": val * uw.CFS_TO_M3S, "value_native": val,
         "negative_flag": (val < 0).fillna(False),

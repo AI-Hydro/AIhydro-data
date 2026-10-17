@@ -438,6 +438,10 @@ def fetch(
         "geom_id": geom_id,
         "geom_key": "aihydro.geom/1",
     }
+    if variable == "streamflow":
+        # The served data differ by USGS backend (Water Data API vs the legacy D3 switch).
+        import os as _os
+        key_payload["usgs_backend"] = _os.environ.get("AIHYDRO_USGS_BACKEND", "").strip().lower() or "waterdata"
     if mode == "manual" and product:
         key_payload["product"] = product
     if index:
@@ -532,7 +536,9 @@ def fetch(
             # product-agnostic in auto mode.
             if cache:
                 try:
-                    cache_write(result, geom_wkt=geom_wkt, geom_id=geom_id)
+                    _sha = cache_write(result, geom_wkt=geom_wkt, geom_id=geom_id)
+                    if _sha:
+                        result = result.model_copy(update={"upstream": {**result.upstream, "data_sha256": _sha}})
                 except Exception as ce:
                     log.debug("Cache write failed (non-fatal): %s", ce)
             return result

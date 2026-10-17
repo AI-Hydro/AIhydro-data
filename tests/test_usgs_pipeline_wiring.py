@@ -315,3 +315,52 @@ def test_collection_dispatch_forwards_region_and_refuses_a_lone_outlet(monkeypat
     with pytest.raises(GeometryInvalid) as ei:
         pipeline.fetch("streamflow", ["03245500", "01646500"], "2020-01-01", "2020-01-02", outlet=(40.0, -90.0))
     assert ei.value.code == "OUTLET_WITH_COLLECTION"
+
+
+# ---------------------------------------------------------------- U1b review: cache key, sha on the miss result, legacy rules
+def test_cache_key_depends_on_the_usgs_backend(replay, monkeypatch):
+    k1 = pipeline.fetch("streamflow", SITE, *FULL, cache=False).cache_key
+    monkeypatch.setenv("AIHYDRO_USGS_BACKEND", "legacy_waterservices")
+    stub = types.ModuleType("dataretrieval.nwis")
+    idx = pd.date_range("1989-10-01", periods=2, tz="UTC", name="datetime")
+    stub.get_dv = lambda **kw: (pd.DataFrame({"00060_Mean": [1.0, 2.0], "00060_Mean_cd": ["A", "A"]}, index=idx), None)
+    monkeypatch.setitem(sys.modules, "dataretrieval.nwis", stub)
+    k2 = pipeline.fetch("streamflow", SITE, *FULL, cache=False).cache_key
+    assert k1 != k2
+
+
+def test_miss_result_carries_data_sha256(replay):
+    r = pipeline.fetch("streamflow", SITE, *FULL)
+    assert not r.cache_hit and r.upstream["data_sha256"] == _latest(r.cache_key).data_sha256
+
+
+def test_no_cache_entry_when_the_hash_cannot_be_computed(replay, monkeypatch):
+    monkeypatch.setattr(cache_mod, "file_sha256", lambda p: (_ for _ in ()).throw(OSError("nope")))
+    r = pipeline.fetch("streamflow", SITE, *FULL)
+    assert cache_mod.cache_status()["entry_count"] == 0 and not list(Path(cache_mod.cache_dir()).glob("*.parquet"))
+    assert "data_sha256" not in r.upstream
+
+
+@pytest.mark.parametrize("val", [-999999.0, float("inf")])
+def test_legacy_path_refuses_sentinel_and_non_finite(monkeypatch, val):
+    monkeypatch.setattr(uw, "_http_get", Replay())
+    stub = types.ModuleType("dataretrieval.nwis")
+    idx = pd.date_range("2020-01-01", periods=2, tz="UTC", name="datetime")
+    stub.get_dv = lambda **kw: (pd.DataFrame({"00060_Mean": [1.0, val], "00060_Mean_cd": ["A", "A"]}, index=idx), None)
+    monkeypatch.setitem(sys.modules, "dataretrieval.nwis", stub)
+    monkeypatch.setenv("AIHYDRO_USGS_BACKEND", "legacy_waterservices")
+    with pytest.raises(TerminalSourceError) as ei:
+        pipeline.fetch("streamflow", SITE, "2020-01-01", "2020-01-02", cache=False)
+    assert ei.value.code in ("USGS_VALUE_SENTINEL", "USGS_VALUE_UNPARSEABLE")
+
+
+def test_legacy_path_keeps_genuine_missing_and_flags_negatives(monkeypatch):
+    monkeypatch.setattr(uw, "_http_get", Replay())
+    stub = types.ModuleType("dataretrieval.nwis")
+    idx = pd.date_range("2020-01-01", periods=3, tz="UTC", name="datetime")
+    stub.get_dv = lambda **kw: (pd.DataFrame({"00060_Mean": [1.0, float("nan"), -2.0], "00060_Mean_cd": ["A", "A", "A"]}, index=idx), None)
+    monkeypatch.setitem(sys.modules, "dataretrieval.nwis", stub)
+    monkeypatch.setenv("AIHYDRO_USGS_BACKEND", "legacy_waterservices")
+    r = pipeline.fetch("streamflow", SITE, "2020-01-01", "2020-01-03", cache=False)
+    assert len(r.data) == 2 and r.quality["n_null_values"] == 1 and r.quality["n_negative"] == 1
+    assert r.data["negative_flag"].tolist() == [False, True]

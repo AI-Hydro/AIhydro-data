@@ -12,6 +12,7 @@ from urllib.parse import parse_qsl, urlparse
 
 import pandas as pd
 import pytest
+from shapely.geometry import Polygon
 
 from aihydro_data.exceptions import SourceUnavailable
 from aihydro_data.sources import usgs_waterdata as uw
@@ -381,7 +382,7 @@ def test_resolve_explicit_alias_and_required(replay):
     g = uw.resolve_gauge(basin_ref=ref)
     assert (g.method, g.alias_verified, g.site) == ("basin_ref_alias", True, "USGS-01013500")
     with pytest.raises(SourceUnavailable) as ei:
-        uw.resolve_gauge(geometry=object())
+        uw.resolve_gauge(geometry=Polygon([(-90, 40), (-89.9, 40), (-89.9, 40.1)]))
     assert ei.value.code == "GAUGE_REQUIRED"
 
 
@@ -486,7 +487,7 @@ def test_real_seam_never_follows_redirects(wire, monkeypatch):
     assert len(w.seen) == 1                                      # the 302 was not followed
     with pytest.raises(SourceUnavailable) as ei:
         uw._request(WD_URL, {"f": "json"}, uw._new_record())
-    assert ei.value.code == "USGS_HTTP_REDIRECT" and not isinstance(ei.value, TerminalSourceError)
+    assert ei.value.code == "USGS_HTTP_REDIRECT" and isinstance(ei.value, TerminalSourceError)
     assert len(w.seen) == 2                                      # still one request each, never a hop
 
 
@@ -524,7 +525,7 @@ def test_repeated_next_link_is_a_runaway(monkeypatch):
     (lambda r: requests.exceptions.Timeout("t"), "USGS_TIMEOUT", False),
     (lambda r: requests.exceptions.ConnectionError("c"), "USGS_UNREACHABLE", False),
     (lambda r: (503, {}, b"{}"), "USGS_SERVER_ERROR", False),
-    (lambda r: (404, {}, b"{}"), "USGS_HTTP_ERROR", False),
+    (lambda r: (404, {}, b"{}"), "USGS_HTTP_ERROR", True),          # a request error a modelled product must not paper over
     (lambda r: (429, {"Retry-After": "5"}, b"{}"), "USGS_RATE_LIMITED", False),
 ])
 def test_transport_failures_map_to_distinct_non_terminal_codes(wire, responder, code, terminal):
@@ -532,6 +533,14 @@ def test_transport_failures_map_to_distinct_non_terminal_codes(wire, responder, 
     with pytest.raises(SourceUnavailable) as ei:
         uw._request(WD_URL, {"f": "json"}, uw._new_record())
     assert ei.value.code == code and isinstance(ei.value, TerminalSourceError) is terminal
+
+
+def test_terminal_code_classification():
+    for c in ("USGS_BAD_BODY", "USGS_HTTP_REDIRECT", "USGS_PAGING_RUNAWAY", "USGS_URL_REFUSED", "USGS_HTTP_ERROR",
+              "USGS_INVALID_QUERY", "USGS_BAD_WINDOW", "USGS_UNSUPPORTED", "GAUGE_AMBIGUOUS", "GEOMETRY_CRS_INVALID"):
+        assert isinstance(uw._err(c, "x"), TerminalSourceError), c
+    for c in ("USGS_TIMEOUT", "USGS_UNREACHABLE", "USGS_SERVER_ERROR", "USGS_RATE_LIMITED", "USGS_TRANSPORT_ERROR"):
+        assert not isinstance(uw._err(c, "x"), TerminalSourceError), c
 
 
 def test_refusals_are_terminal_and_unavailability_is_not(monkeypatch):

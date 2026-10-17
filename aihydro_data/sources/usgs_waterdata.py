@@ -65,12 +65,17 @@ _MAX_PAGES = 200
 # Identity / integrity refusals: terminal (TerminalSourceError), never answered by a
 # modelled product. Everything else - HTTP errors, rate limits, timeouts, unreachable
 # host, 5xx, bad bodies - means "could not look" and stays a plain SourceUnavailable
-# (transient codes: USGS_TIMEOUT, USGS_UNREACHABLE, USGS_SERVER_ERROR, USGS_RATE_LIMITED).
+# (transient codes: USGS_TIMEOUT, USGS_UNREACHABLE, USGS_SERVER_ERROR (5xx), USGS_RATE_LIMITED (429),
+# USGS_TRANSPORT_ERROR).
 TERMINAL_CODES = frozenset({
     "GAUGE_REQUIRED", "GAUGE_NOT_FOUND", "GAUGE_AMBIGUOUS",
     "USGS_SITE_INVALID", "USGS_SITE_NOT_FOUND", "USGS_NO_DATA", "USGS_MULTIPLE_SERIES",
     "USGS_APPROVAL_UNKNOWN", "USGS_UNIT_UNKNOWN", "USGS_VALUE_UNPARSEABLE", "USGS_VALUE_SENTINEL",
     "USGS_DUPLICATE_TIME", "USGS_CHUNK_CONFLICT", "USGS_QUALIFIER_INVALID", "USGS_TIME_NAIVE", "USGS_TIME_MISSING",
+    # malformed / unexpected data and caller or request errors are not "could not look"
+    "USGS_BAD_BODY", "USGS_HTTP_REDIRECT", "USGS_PAGING_RUNAWAY", "USGS_URL_REFUSED", "USGS_HOST_NOT_ALLOWED",
+    "USGS_HTTP_ERROR", "USGS_INVALID_QUERY", "USGS_BAD_WINDOW", "USGS_UNSUPPORTED",
+    "GEOMETRY_CRS_INVALID", "GEOMETRY_UNSUPPORTED",
 })
 TRANSIENT_CODES = frozenset({"USGS_TIMEOUT", "USGS_UNREACHABLE", "USGS_SERVER_ERROR", "USGS_RATE_LIMITED",
                              "USGS_TRANSPORT_ERROR"})
@@ -168,8 +173,9 @@ DEFAULT_THRESHOLDS = {
     "outlet_offset_max_m": 200.0,
     "query_distance_km": 10,
 }
-DISTANCE_BASIS = ("along-network sum of spherical great-circle segment lengths (R=6371008.8 m) between the "
-                  "projections of the outlet and of the gauge point onto the NLDI NHDPlusV2 flowline "
+DISTANCE_BASIS = ("shortest along-network path (Dijkstra over every returned NLDI UM/DM flowline, so confluences "
+                  "and braids are all considered) of spherical great-circle segment lengths (R=6371008.8 m) "
+                  "between the projections of the outlet and of the gauge point onto the NLDI NHDPlusV2 flowline "
                   "geometries; negative = upstream, positive = downstream")
 AREA_UNITS_NOTE = ("A_gauge converted as square miles x 2.589988110336; the Water Data API body does not state "
                    "the unit of drainage_area (USGS documents square miles). Cross-check: legacy site rdb "
@@ -695,29 +701,87 @@ def _geojson_area_km2(g: Mapping[str, Any]) -> float:
 
 
 def polygon_area_km2(geometry) -> Optional[float]:
-    """Spherical-excess area of a shapely Polygon/MultiPolygon (None for anything else)."""
-    gi = getattr(geometry, "__geo_interface__", None)
+    """Spherical-excess area of a shapely Polygon/MultiPolygon or a GeoJSON geometry mapping
+    (None for anything else)."""
+    gi = geometry if isinstance(geometry, Mapping) else getattr(geometry, "__geo_interface__", None)
     if not gi or gi.get("type") not in ("Polygon", "MultiPolygon"):
         return None
     return _geojson_area_km2(gi)
 
 
-def _chain(flowlines: dict, start: int, direction: str) -> list[int]:
-    """Ordered COMIDs from ``start`` (exclusive), walking by shared end nodes.
-    NHDPlus flowlines are digitised downstream: a reach's last vertex is its downstream node."""
-    def key(pt):
-        return (round(pt[0], 7), round(pt[1], 7))
-    first = {key(c[0]): k for k, c in flowlines.items()}
-    last = {key(c[-1]): k for k, c in flowlines.items()}
-    out, cur, seen = [], start, {start}
-    while True:
-        if direction == "UM":
-            nxt = last.get(key(flowlines[cur][0]))
+def _coords(o):
+    if isinstance(o, (list, tuple)):
+        if o and isinstance(o[0], (int, float)):
+            yield o
         else:
-            nxt = first.get(key(flowlines[cur][-1]))
-        if nxt is None or nxt in seen:
-            return out
-        out.append(nxt); seen.add(nxt); cur = nxt
+            for x in o:
+                yield from _coords(x)
+
+
+def _checked_geometry_area(geometry) -> Optional[float]:
+    """Area (km2) of the request geometry, after checking it is EPSG:4326 lon/lat.
+
+    Polygon/MultiPolygon (shapely or GeoJSON mapping) give an area; a Point/MultiPoint gives None
+    (it can anchor an outlet but says nothing about area). Anything else is refused, never silently
+    ignored (which would swap the independent area basis for the NLDI catchment)."""
+    if geometry is None:
+        return None
+    gi = geometry if isinstance(geometry, Mapping) else getattr(geometry, "__geo_interface__", None)
+    if not isinstance(gi, Mapping) or "coordinates" not in gi:
+        raise _err("GEOMETRY_UNSUPPORTED", f"cannot use a {type(geometry).__name__} as a basin geometry",
+                   "pass a shapely Polygon/MultiPolygon or a GeoJSON geometry in EPSG:4326")
+    for c in _coords(gi["coordinates"]):
+        if not (-180.0 <= c[0] <= 180.0 and -90.0 <= c[1] <= 90.0):
+            raise _err("GEOMETRY_CRS_INVALID", f"coordinate {tuple(c[:2])} is outside lon/lat range; "
+                       "EPSG:4326 (lon, lat degrees) is required", "reproject the geometry to EPSG:4326")
+    if gi.get("type") in ("Point", "MultiPoint"):
+        return None
+    a = polygon_area_km2(gi)
+    if a is None:
+        raise _err("GEOMETRY_UNSUPPORTED", f"geometry type {gi.get('type')!r} cannot give a basin area",
+                   "pass a Polygon or MultiPolygon, or a Point/outlet only")
+    if not a > 0:
+        raise _err("GEOMETRY_UNSUPPORTED", "the basin geometry has zero area")
+    return a
+
+
+def _node(pt) -> tuple:
+    return (round(pt[0], 7), round(pt[1], 7))
+
+
+def _near_distances(reaches: dict, start_node: tuple, start_dist: float, direction: str, skip: int) -> dict:
+    """Dijkstra over ALL returned reaches (confluences, divergences and braids included).
+
+    NHDPlus flowlines are digitised downstream: a reach's first vertex is its upstream node and its
+    last vertex its downstream node. Moving upstream (``UM``) from node n we may enter every reach
+    whose DOWNSTREAM node is n and arrive at its UPSTREAM node; ``DM`` is the mirror. The result maps
+    each reach to the along-network distance from P_o to the node where it is first entered
+    (its downstream node for UM, its upstream node for DM), taking the shortest path. Reaches are
+    visited in (distance, comid) order, so the outcome never depends on response order."""
+    import heapq
+    enter = {}                      # node -> sorted [(comid, exit_node, length)]
+    for cid in sorted(reaches):
+        if cid == skip:
+            continue
+        c = reaches[cid]
+        up, dn = _node(c[0]), _node(c[-1])
+        at, to = (dn, up) if direction == "UM" else (up, dn)
+        enter.setdefault(at, []).append((cid, to, _line_length(c)))
+    best = {start_node: start_dist}
+    near: dict[int, float] = {}
+    heap = [(start_dist, start_node)]
+    while heap:
+        d, n = heapq.heappop(heap)
+        if d > best.get(n, float("inf")):
+            continue
+        for cid, to, L in enter.get(n, ()):
+            if cid not in near or d < near[cid]:
+                near[cid] = d
+            nd = d + L
+            if nd < best.get(to, float("inf")):
+                best[to] = nd
+                heapq.heappush(heap, (nd, to))
+    return near
 
 
 def _flowlines(doc: Mapping[str, Any]) -> dict[int, list]:
@@ -748,10 +812,17 @@ def _site_bare(site: str) -> str:
 
 
 def _alias_site(basin_ref: Mapping[str, Any]) -> tuple[Optional[str], Optional[bool]]:
+    found = []
     for a in basin_ref.get("aliases", []) or []:
         if isinstance(a, Mapping) and a.get("scheme") == "usgs" and a.get("relation", "same_as") == "same_as":
-            return str(a.get("id")), bool(a.get("verified", False))
-    return None, None
+            found.append((_site_id(str(a.get("id"))), bool(a.get("verified", False))))
+    sites = sorted({f[0] for f in found})
+    if len(sites) > 1:
+        raise _err("GAUGE_AMBIGUOUS", f"the BasinRef carries conflicting usgs aliases {sites}",
+                   "fix the BasinRef or pass gauge_id explicitly", reason="identity_conflict", aliases=sites, candidates=[])
+    if not found:
+        return None, None
+    return sites[0], all(v for sid, v in found if sid == sites[0])
 
 
 def resolve_gauge(geometry=None, *, gauge_id: Optional[str] = None, basin_ref: Optional[Mapping[str, Any]] = None,
@@ -775,7 +846,7 @@ def resolve_gauge(geometry=None, *, gauge_id: Optional[str] = None, basin_ref: O
         th["outlet_offset_max_m"] = float(outlet_offset_max_m)
     overridden = any(th[k] != DEFAULT_THRESHOLDS[k] for k in th)
     rec = _new_record()
-    area_geom = polygon_area_km2(geometry) if geometry is not None else None
+    area_geom = _checked_geometry_area(geometry)
 
     # ---- R0 precedence
     alias_site, alias_ver = _alias_site(basin_ref) if basin_ref is not None else (None, None)
@@ -821,6 +892,9 @@ def resolve_gauge(geometry=None, *, gauge_id: Optional[str] = None, basin_ref: O
                    "basin geometry, or request a modelled product explicitly",
                    reason="no_identity", candidates=[])
     lon, lat = float(outlet[0]), float(outlet[1])
+    if not (-180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0):
+        raise _err("GEOMETRY_CRS_INVALID", f"outlet ({lon}, {lat}) is outside lon/lat range; pass (lon, lat) in EPSG:4326",
+                   "the outlet is (lon, lat) for resolve_gauge and (lat, lon) for fetch()")
 
     # ---- R1 anchoring
     pos = _request(f"{NLDI_BASE}/comid/position", {"coords": f"POINT({lon} {lat})", "f": "json"}, rec)
@@ -846,26 +920,21 @@ def resolve_gauge(geometry=None, *, gauge_id: Optional[str] = None, basin_ref: O
     sites: dict[str, dict] = {}
     for d in ("UM", "DM"):
         nav = _request(f"{NLDI_BASE}/comid/{c_o}/navigation/{d}/nwissite", q, rec)
-        for f in nav.get("features", []):
+        for f in sorted(nav.get("features", []), key=lambda f: str(f.get("properties", {}).get("identifier"))):
             ident = f.get("properties", {}).get("identifier")
             if ident and ident not in sites:
                 sites[ident] = f
     fl = {c_o: own}
-    chains = {}
+    near = {}
     for d in ("UM", "DM"):
         navf = _request(f"{NLDI_BASE}/comid/{c_o}/navigation/{d}/flowlines", q, rec)
         got = _flowlines(navf)
-        for k, v in got.items():
-            fl.setdefault(k, v)
-        chains[d] = _chain({**got, c_o: own}, c_o, d)
-    seq = {}
-    for d, sign in (("UM", -1), ("DM", 1)):
-        run = 0.0
-        # distance from P_o to the far end of the starting reach, then whole reaches
-        run = s_o if d == "UM" else L_o - s_o
-        for cid in chains[d]:
-            seq[cid] = (d, sign, run, _line_length(fl[cid]))
-            run += _line_length(fl[cid])
+        for k in sorted(got):
+            fl.setdefault(k, got[k])
+        if d == "UM":
+            near[d] = _near_distances({**got, c_o: own}, _node(own[0]), s_o, "UM", c_o)
+        else:
+            near[d] = _near_distances({**got, c_o: own}, _node(own[-1]), L_o - s_o, "DM", c_o)
 
     if area_geom is None:
         basin = _request(f"{NLDI_BASE}/comid/{c_o}/basin", {"f": "json"}, rec)
@@ -883,14 +952,20 @@ def resolve_gauge(geometry=None, *, gauge_id: Optional[str] = None, basin_ref: O
         cid = int(cid) if cid is not None else None
         row = {"site": ident, "comid": cid, "direction": None, "distance_m": None, "A_gauge_km2": None,
                "A_gauge_contributing_km2": None, "log_area_ratio": None, "status": None, "name": f["properties"].get("name")}
-        # R3 distance
+        # R3 distance: same reach by arc position; otherwise the shortest returned path
         if cid == c_o:
             sg, _ = _project(own, x, y)
             row["distance_m"] = sg - s_o
-        elif cid in seq:
-            dname, sign, run, L = seq[cid]
-            sg, _ = _project(fl[cid], x, y)
-            row["distance_m"] = sign * (run + (L - sg if sign < 0 else sg))
+        else:
+            opts = []
+            if cid in near["UM"]:
+                sg, _ = _project(fl[cid], x, y)
+                opts.append(-(near["UM"][cid] + (_line_length(fl[cid]) - sg)))
+            if cid in near["DM"]:
+                sg, _ = _project(fl[cid], x, y)
+                opts.append(near["DM"][cid] + sg)
+            if opts:
+                row["distance_m"] = min(opts, key=lambda v: (abs(v), v))
         if row["distance_m"] is not None:
             dm = row["distance_m"]
             row["direction"] = "at_outlet" if dm == 0 else ("upstream" if dm < 0 else "downstream")

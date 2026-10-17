@@ -422,3 +422,138 @@ def test_01013500_pool_matches_the_recorded_navigation(fixtures):
     assert [v for k, v in st.items() if k.startswith("USGS-01014000") and k != "USGS-01014000"] == ["no_discharge_series"] * 10
     assert g.A_gauge_km2 == pytest.approx(870 * 2.589988110336)
     assert 870 == _legacy_drain("01013500")
+
+
+# ------------------------------------------------------------------ network topology (U1b review B1)
+class TopoWorld(World):
+    """World plus extra flowlines in the UM/DM responses (tributaries, braids) and response reversal."""
+
+    def __init__(self, *a, extra=(), rev=False, **k):
+        super().__init__(*a, **k)
+        self.extra, self.rev = list(extra), rev
+
+    def __call__(self, url, params=None, headers=None):
+        if "/navigation/" in url and url.endswith("/flowlines"):
+            um = "/UM/" in url
+            ks = range(-6, 1) if um else range(0, 7)
+            feats = [{"type": "Feature", "geometry": {"type": "LineString", "coordinates": self.reach(k)},
+                      "properties": {"nhdplus_comid": 5000 + k}} for k in ks]
+            feats += [{"type": "Feature", "geometry": {"type": "LineString", "coordinates": c},
+                       "properties": {"nhdplus_comid": cid}} for cid, c, d in self.extra if (d == "UM") == um]
+            if self.rev:
+                feats.reverse()
+            return ok({"type": "FeatureCollection", "features": feats})
+        return super().__call__(url, params, headers)
+
+
+def _trib_world(rev):
+    b = basin_area(World())
+    # a tributary joins the main stem at node m=-1000 (the outlet reach's upstream end); gauge 2 sits on it
+    trib = [(9999, [[LON0 + 0.02, lat_at(-3000)], [LON0, lat_at(-1000)]], "UM")]
+    return TopoWorld([site(100, -2000, 1.0, basin_km2=b), site(101, -2500, 1.0, basin_km2=b, comid=9999)], extra=trib, rev=rev)
+
+
+def test_confluence_distance_follows_every_branch_not_the_last_one_seen(run):
+    for rev in (False, True):
+        e = refusal(run, _trib_world(rev))
+        rows = {c["site"][-3:]: c for c in e.details["candidates"]}
+        assert rows["100"]["status"] == rows["101"]["status"] == "admissible"          # both are within 5 km
+        assert rows["100"]["distance_m"] == pytest.approx(-2000, abs=0.01)             # main-stem gauge: via the main stem
+        trib_len = uw._line_length([[LON0 + 0.02, lat_at(-3000)], [LON0, lat_at(-1000)]])
+        assert rows["101"]["distance_m"] == pytest.approx(-(1000 + trib_len / 2), abs=trib_len * 0.5 + 1)   # via the tributary
+
+
+def test_tributary_only_gauge_resolves_identically_in_both_orders(run):
+    b = basin_area(World())
+    out = []
+    for rev in (False, True):
+        w = TopoWorld([site(101, -2500, 1.0, basin_km2=b, comid=9999)], rev=rev,
+                      extra=[(9999, [[LON0 + 0.02, lat_at(-3000)], [LON0, lat_at(-1000)]], "UM")])
+        g = run(w)
+        d = g.to_dict(); d.pop("upstream"); out.append(d)
+    assert out[0] == out[1] and out[0]["direction"] == "upstream"
+
+
+def test_downstream_braid_is_deterministic_and_shortest(run):
+    b = basin_area(World())
+    braid = [(8888, [[LON0, lat_at(1000)], [LON0 + 0.02, lat_at(4000)]], "DM")]       # a second reach leaves node +1000
+    res = []
+    for rev in (False, True):
+        e = refusal(run, TopoWorld([site(6, 1500, 1.0, basin_km2=b), site(7, 3500, 1.0, basin_km2=b, comid=8888)],
+                                   extra=braid, rev=rev))
+        res.append([(c["site"], c["status"], round(c["distance_m"], 6)) for c in e.details["candidates"]])
+    assert res[0] == res[1] and {r[1] for r in res[0]} == {"admissible"}
+
+
+def test_loop_in_the_returned_network_terminates(run):
+    b = basin_area(World())
+    loop = [(7777, [[LON0, lat_at(7000)], [LON0, lat_at(1000)]], "DM")]
+    g = run(TopoWorld([site(5, 3000, 1.0, basin_km2=b)], extra=loop))
+    assert g.direction == "downstream" and abs(g.distance_m - 3000) < 0.01
+
+
+def test_T22_shuffles_cover_the_braid_world_too(run):
+    spec = [(1200, 1.04, {}), (-2500, 3.0, {}), (4000, 0.2, {}), (-9000, 1.0, {})]
+    b = basin_area(World())
+    extra = [(8888, [[LON0, lat_at(1000)], [LON0 + 0.02, lat_at(4000)]], "DM")]
+    out = []
+    for rev, sh in ((False, False), (True, True)):
+        w = TopoWorld([site(100 + i, m, r, basin_km2=b, **ex) for i, (m, r, ex) in enumerate(spec)], extra=extra, rev=rev, shuffle=sh)
+        d = run(w).to_dict(); d.pop("upstream"); out.append(d)
+    assert out[0] == out[1]
+
+
+# ------------------------------------------------------------------ review items
+def test_area_tolerance_is_1e_minus_12():
+    lim = math.log(1.10)
+    for delta, expect in ((5e-13, "pass"), (-5e-13, "pass"), (5e-11, "fail")):
+        _, _, chk = uw._area_check(100.0 * math.exp(lim + delta), 100.0, lim)
+        assert chk == expect, delta
+
+
+@pytest.mark.parametrize("geom", [Polygon([(500000, 4400000), (500100, 4400000), (500100, 4400100)]),
+                                  {"type": "Polygon", "coordinates": [[[500000, 4400000], [500100, 4400000], [500100, 4400100], [500000, 4400000]]]}])
+def test_projected_coordinates_are_refused(monkeypatch, geom):
+    w = World(); monkeypatch.setattr(uw, "_http_get", w)
+    with pytest.raises(TerminalSourceError) as ei:
+        uw.resolve_gauge(geom, outlet=w.outlet)
+    assert ei.value.code == "GEOMETRY_CRS_INVALID" and w.calls == []
+
+
+def test_outlet_out_of_range_is_refused(monkeypatch):
+    w = World(); monkeypatch.setattr(uw, "_http_get", w)
+    with pytest.raises(TerminalSourceError) as ei:
+        uw.resolve_gauge(outlet=(40.0, -190.0))
+    assert ei.value.code == "GEOMETRY_CRS_INVALID"
+
+
+def test_geojson_dict_geometry_is_used_for_the_area_basis(monkeypatch):
+    w = mk([(100, 1.0, {})])
+    monkeypatch.setattr(uw, "_http_get", w)
+    out = uw.resolve_gauge(mapping(w.basin), outlet=w.outlet)
+    assert out.area_basis == "request_geometry" and abs(out.area_ratio - 1.0) < 1e-9
+
+
+@pytest.mark.parametrize("bad", ["a string", 5, object()])
+def test_unusable_geometry_is_refused_not_ignored(monkeypatch, bad):
+    w = World(); monkeypatch.setattr(uw, "_http_get", w)
+    with pytest.raises(TerminalSourceError) as ei:
+        uw.resolve_gauge(bad, outlet=w.outlet)
+    assert ei.value.code == "GEOMETRY_UNSUPPORTED" and w.calls == []
+
+
+def test_point_geometry_is_an_outlet_only_and_uses_the_comid_basin(run, monkeypatch):
+    from shapely.geometry import Point
+    w = mk([(100, 1.0, {})]); monkeypatch.setattr(uw, "_http_get", w)
+    g = uw.resolve_gauge(Point(*w.outlet), outlet=w.outlet)
+    assert g.area_basis == "nldi_comid_basin"
+
+
+def test_conflicting_usgs_aliases_are_an_identity_conflict(monkeypatch):
+    w = _named_world(); monkeypatch.setattr(uw, "_http_get", w)
+    ref = {"aliases": [{"scheme": "usgs", "id": "01013500", "verified": True}, {"scheme": "usgs", "id": "01646500", "verified": True}]}
+    with pytest.raises(TerminalSourceError) as ei:
+        uw.resolve_gauge(basin_ref=ref)
+    assert ei.value.code == "GAUGE_AMBIGUOUS" and ei.value.details["reason"] == "identity_conflict" and w.calls == []
+    ref["aliases"][1]["id"] = "USGS-01013500"                          # same site twice is not a conflict
+    assert uw.resolve_gauge(basin_ref=ref).site == "USGS-01013500"
