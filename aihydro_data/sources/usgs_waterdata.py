@@ -14,6 +14,11 @@ bodies in ``tests/fixtures/usgs_waterdata/`` (captured 2026-10-17):
 * ``qualifier`` is ``null`` or a list of strings (``ESTIMATED``,
   ``FORCEINTERPOLATION``, ...); ``value`` is a string, ``null`` when missing;
 * ``unit_of_measure`` is ``ft^3/s`` (legacy ``dv`` says ``ft3/s``);
+* every response body carries a top-level ``timeStamp`` (the response generation time) and
+  a top-level ``links`` array (``self`` / ``alternate`` / ``next`` hrefs that embed the query
+  and the opaque paging cursor), so ``response_sha256`` identifies the *retrieval*, not the
+  content: two byte-different bodies were parsed-JSON identical apart from ``timeStamp``
+  (Wave U proof 3, E6). ``content_sha256`` / ``features_sha256`` identify the content;
 * ``Last-Modified`` and ``ETag`` are NOT sent; paging is a ``rel=next`` link
   carrying an opaque ``cursor`` (no ``numberMatched``);
 * ``/collections/continuous`` rejects windows over 1100 days with HTTP 400
@@ -59,6 +64,14 @@ QUALIFIER_CODES = {"ESTIMATED": "e"}
 # The server rejects windows of more than 1100 days; chunk below that.
 CONTINUOUS_MAX_DAYS = 1095
 _MAX_PAGES = 200
+
+# Top-level envelope keys that vary between retrievals of identical content and are
+# therefore excluded from ``content_sha256``. ``timeStamp``: generation time of the
+# response (differs on every call). ``links``: self/alternate URLs and the ``rel=next``
+# paging cursor, which are navigation, not content (and may embed an opaque cursor).
+# Deliberately NOT excluded: ``numberReturned`` (a count of the content) and every
+# per-feature field, including a feature's own ``last_modified`` (a revision signal).
+VOLATILE_ENVELOPE_KEYS = ("timeStamp", "links")
 
 
 # ---------------------------------------------------------------- errors
@@ -127,6 +140,24 @@ def _http_get(url: str, params: Optional[Mapping[str, Any]] = None,
     except requests.exceptions.RequestException as e:      # ChunkedEncodingError, ContentDecodingError, ...
         raise _err("USGS_TRANSPORT_ERROR", f"{type(e).__name__} talking to {host}", "retry later") from e
     return r.status_code, dict(r.headers), r.content
+
+
+def _canonical_json(obj: Any) -> bytes:
+    """Deterministic JSON bytes: sorted keys, no whitespace, UTF-8, NaN/Inf refused."""
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                      allow_nan=False).encode("utf-8")
+
+
+def content_sha256(doc: Any) -> str:
+    """sha256 of the canonical JSON of a response body minus :data:`VOLATILE_ENVELOPE_KEYS`."""
+    if isinstance(doc, dict):
+        doc = {k: v for k, v in doc.items() if k not in VOLATILE_ENVELOPE_KEYS}
+    return hashlib.sha256(_canonical_json(doc)).hexdigest()
+
+
+def features_sha256(features: Sequence[Any]) -> str:
+    """sha256 of the canonical JSON of a feature list, in order."""
+    return hashlib.sha256(_canonical_json(list(features))).hexdigest()
 
 
 def _canonical(url: str, params: Optional[Mapping[str, Any]]) -> str:
@@ -305,16 +336,22 @@ def _request(url: str, params: Optional[Mapping[str, Any]], record: dict) -> dic
     record["date"].append(h.get("date"))
     record["x_build_version"].append(h.get("x-build-version"))
     try:
-        return json.loads(body)
+        doc = json.loads(body)
     except Exception as e:
         raise _err("USGS_BAD_BODY", f"response is not JSON: {e}") from e
+    try:
+        record["content_sha256"].append(content_sha256(doc))
+    except Exception:                       # e.g. non-finite number: say so, never skip silently
+        record["content_sha256"].append(None)
+    return doc
 
 
 def _new_record() -> dict:
     return {"backend": "usgs_waterdata", "api_version": "ogcapi/v1",
             "request_urls": [], "retrieved_at": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "response_sha256": [], "last_modified": [], "etag": [], "date": [],
-            "x_build_version": [], "feature_last_modified_max": None, "n_pages": 0}
+            "response_sha256": [], "content_sha256": [], "volatile_envelope_keys": list(VOLATILE_ENVELOPE_KEYS),
+            "last_modified": [], "etag": [], "date": [],
+            "x_build_version": [], "feature_last_modified_max": None, "features_sha256": None, "n_pages": 0}
 
 
 def _paged_features(url: str, params: Mapping[str, Any], record: dict) -> list[dict]:
@@ -473,6 +510,10 @@ def _build(features: list[dict], site_id: str, parameter_code: str, statistic_id
     else:
         chosen = ids[0]
 
+    try:
+        record["features_sha256"] = features_sha256(features)
+    except Exception:
+        record["features_sha256"] = None
     props = [f["properties"] for f in features]
     units = {p.get("unit_of_measure") for p in props}
     if len(units) != 1:

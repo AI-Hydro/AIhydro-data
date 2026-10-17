@@ -729,3 +729,74 @@ def test_other_requests_exceptions_are_transient_and_coded(wire, exc):
     with pytest.raises(SourceUnavailable) as ei:
         uw._request(WD_URL, {"f": "json"}, uw._new_record())
     assert ei.value.code == "USGS_TRANSPORT_ERROR" and not isinstance(ei.value, TerminalSourceError)
+
+
+# ------------------------------------------------------------- content identity (E6, 0.2.4)
+def _serve(monkeypatch, d):
+    """Serve one fixed document for every request (metadata lookups included)."""
+    monkeypatch.setattr(uw, "_http_get", lambda url, params=None, headers=None: ok(d))
+
+
+@pytest.mark.parametrize("name", ["daily_01013500_wy1990_2009", "daily_01109000_2019", "daily_03245500_2010_2020",
+                                  "daily_01013500_last120d_provisional"])
+def test_content_sha256_ignores_only_the_volatile_envelope(name):
+    a = doc(name)
+    assert "timeStamp" in a and "links" in a
+    b = json.loads(json.dumps(a))
+    b["timeStamp"] = "2099-01-01T00:00:00.000Z"
+    b["links"] = [{"rel": "next", "href": "https://api.waterdata.usgs.gov/x?cursor=ZZZ"}]
+    assert uw.content_sha256(a) == uw.content_sha256(b)
+    # reordered keys do not matter either
+    assert uw.content_sha256(dict(reversed(list(a.items())))) == uw.content_sha256(a)
+    # the raw byte digest is NOT stable: that is the defect this fixes
+    assert json.dumps(a) != json.dumps(b)
+    assert uw.VOLATILE_ENVELOPE_KEYS == ("timeStamp", "links")
+
+
+def test_content_sha256_changes_with_any_value_or_count():
+    a = doc("daily_01013500_wy1990_2009")
+    base = uw.content_sha256(a)
+    v = json.loads(json.dumps(a)); v["features"][100]["properties"]["value"] = "0.01"
+    assert uw.content_sha256(v) != base
+    q = json.loads(json.dumps(a))
+    i = next(i for i, f in enumerate(q["features"]) if f["properties"]["qualifier"])     # drop a real qualifier
+    q["features"][i]["properties"]["qualifier"] = None
+    assert uw.content_sha256(q) != base
+    m = json.loads(json.dumps(a)); m["features"][0]["properties"]["last_modified"] = "2030-01-01T00:00:00Z"
+    assert uw.content_sha256(m) != base
+    d = json.loads(json.dumps(a)); d["features"] = d["features"][:-1]
+    assert uw.content_sha256(d) != base
+    n = json.loads(json.dumps(a)); n["numberReturned"] = a["numberReturned"] + 1
+    assert uw.content_sha256(n) != base
+    assert uw.features_sha256(a["features"]) != uw.features_sha256(list(reversed(a["features"])))
+
+
+def test_series_records_content_and_features_digests_from_recorded_bodies(replay):
+    s = uw.get_daily("01013500", "1989-10-01", "2009-09-30")
+    up = s.upstream
+    d = doc("daily_01013500_wy1990_2009")
+    assert up["response_sha256"] == [INDEX["daily_01013500_wy1990_2009"]["body_sha256"]]    # kept
+    assert up["content_sha256"] == [uw.content_sha256(d)]
+    assert up["features_sha256"] == uw.features_sha256(d["features"])
+    assert up["volatile_envelope_keys"] == ["timeStamp", "links"]
+
+
+def test_retrievals_differing_only_in_timestamp_share_content_identity(monkeypatch):
+    d1 = doc("daily_01013500_wy1990_2009")
+    d2 = json.loads(json.dumps(d1)); d2["timeStamp"] = "2026-10-17T17:20:00.000Z"
+    _serve(monkeypatch, d1); s1 = uw.get_daily("01013500", "1989-10-01", "2009-09-30")
+    _serve(monkeypatch, d2); s2 = uw.get_daily("01013500", "1989-10-01", "2009-09-30")
+    assert s1.upstream["response_sha256"] != s2.upstream["response_sha256"]
+    assert s1.upstream["content_sha256"] == s2.upstream["content_sha256"]
+    assert s1.upstream["features_sha256"] == s2.upstream["features_sha256"]
+    d3 = json.loads(json.dumps(d1)); d3["features"][7]["properties"]["value"] = "1.234"
+    _serve(monkeypatch, d3); s3 = uw.get_daily("01013500", "1989-10-01", "2009-09-30")
+    assert s3.upstream["content_sha256"] != s1.upstream["content_sha256"]
+    assert s3.upstream["features_sha256"] != s1.upstream["features_sha256"]
+
+
+def test_paged_series_has_one_content_digest_per_page_and_cursor_free_identity(replay):
+    p = uw.get_daily("01013500", "1989-10-01", "2009-09-30", limit=2000)
+    assert len(p.upstream["content_sha256"]) == 4 and None not in p.upstream["content_sha256"]
+    single = uw.get_daily("01013500", "1989-10-01", "2009-09-30")
+    assert p.upstream["features_sha256"] == single.upstream["features_sha256"]   # same features, any paging

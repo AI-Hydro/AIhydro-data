@@ -3,6 +3,24 @@
 All notable changes to `aihydro-data` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.4] — 2026-10-17
+
+Wave U patch (proof 3, finding E6). The Water Data API body carries a per-response top-level `timeStamp`
+(and a `links` array with paging cursors), so `response_sha256` identifies the *retrieval*, not the
+content: the same data fetched at two times had different digests (parsed JSON identical apart from
+`timeStamp`).
+
+### Added
+
+- `upstream` provenance of every Water Data API series (and so the cache manifest) now also records
+  `content_sha256` (one per response, same order as `response_sha256`), `features_sha256` (over the
+  canonical features of the series actually used, in order; independent of paging) and
+  `volatile_envelope_keys`. `response_sha256` is kept unchanged.
+- `usgs_waterdata.content_sha256`, `features_sha256`, `VOLATILE_ENVELOPE_KEYS`. Canonical JSON = sorted
+  keys, no whitespace, UTF-8. Volatile set, read from the recorded fixtures: top-level `timeStamp` and
+  `links` (self/alternate hrefs and the `rel=next` cursor). `numberReturned` and every per-feature field,
+  including a feature's own `last_modified`, stay in the digest.
+
 ## [0.2.3] — 2026-10-17
 
 Wave U summary (data layer). **U1a:** new `sources/usgs_waterdata.py` for the USGS Water Data OGC API
