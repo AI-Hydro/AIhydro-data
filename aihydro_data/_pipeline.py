@@ -12,7 +12,7 @@ Pipeline (Phase 2+):
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from aihydro_data.exceptions import TerminalSourceError
 
@@ -127,6 +127,24 @@ class BatchResult(list):
         self.labels: list[str] = labels
 
 
+def _per_item(value: Any, name: str, ok_value: Callable[[Any], bool],
+              single_marker: str = "") -> Optional[Mapping[str, Any]]:
+    """Gauge identity for a collection must be an explicit ``{label: value}`` mapping: one id
+    applied to many geometries would be wrong for all but one of them."""
+    if value is None:
+        return None
+    is_map = isinstance(value, Mapping) and not (single_marker and single_marker in value)
+    if not is_map or not all(ok_value(v) for v in value.values()):
+        from aihydro_data.exceptions import GeometryInvalid
+        raise GeometryInvalid(
+            code="GAUGE_WITH_COLLECTION",
+            message=f"{name}= identifies one gauge and cannot apply to several geometries.",
+            recovery=f"Pass {name} as a {{label: value}} mapping keyed like the geometries, or call fetch() once per geometry.",
+            next_tools=["data_help"], docs_anchor="batch",
+        )
+    return dict(value)
+
+
 def _looks_like_collection(geom: Any) -> bool:
     """
     Detect "user passed multiple geometries" so fetch() can auto-dispatch
@@ -187,6 +205,8 @@ def fetch(
     validate: Optional[Callable[[FetchResult], bool]] = None,
     region: Optional[str] = None,
     outlet: Optional[tuple[float, float]] = None,
+    gauge_id: Optional[str] = None,
+    basin_ref: Optional[Mapping[str, Any]] = None,
 ) -> FetchResult:
     """
     Fetch one variable for one geometry/time window.
@@ -249,6 +269,15 @@ def fetch(
             GloFAS, Open-Meteo Flood). Defaults to the geometry centroid, which
             often sits off-channel; pass a delineated basin pour point for the
             most reliable main-stem snap. Ignored by areal/gridded backends.
+        gauge_id, basin_ref: USGS gauge identity for NWIS (ADR-003 amendment A2, R0).
+            ``gauge_id`` is a site number ('01013500' or 'USGS-01013500'); ``basin_ref`` is
+            a BasinRef dict whose ``aliases`` may carry a ``usgs`` alias. Precedence is
+            explicit id > alias > outlet; an id that disagrees with an alias refuses
+            GAUGE_AMBIGUOUS (identity_conflict). A polygon passed as ``geometry`` is the
+            area basis for the area check; for an explicit id or alias a failed check is a
+            warning on the result and manifest, never a refusal. Both are part of the cache
+            key and are ignored by non-NWIS products. For collections pass a
+            ``{label: value}`` mapping, or call per geometry.
     """
     # ── -1. Normalise variable name (alias table + lower/strip) ──────────
     variable = _normalise_variable(variable)
@@ -268,12 +297,15 @@ def fetch(
                 recovery="Call fetch() once per geometry, each with its own outlet.",
                 next_tools=["data_help"], docs_anchor="batch",
             )
+        _gids = _per_item(gauge_id, "gauge_id", lambda v: isinstance(v, str))
+        _brefs = _per_item(basin_ref, "basin_ref", lambda v: isinstance(v, Mapping),
+                           single_marker="aliases")
         batch = fetch_batch(
             variable, geometry, start, end,
             mode=mode, product=product, fallback=fallback,
             aggregation=aggregation, cache=cache,
             index=index, native_resolution=native_resolution, validate=validate,
-            region=region,
+            region=region, gauge_ids=_gids, basin_refs=_brefs,
         )
         errors: dict[str, Exception] = batch["errors"]
         results = [batch["results"][lbl] for lbl in batch["labels"]
@@ -342,6 +374,8 @@ def fetch(
         cache=cache,
         region=region,
         outlet=outlet,
+        gauge_id=gauge_id,
+        basin_ref=dict(basin_ref) if basin_ref is not None else None,
     )
 
     # ── 2. Coerce geometry ────────────────────────────────────────────────
@@ -448,10 +482,21 @@ def fetch(
         key_payload["index"] = index.upper()
     if native_resolution:
         key_payload["native_resolution"] = True
+    if req.gauge_id is not None:
+        _g = str(req.gauge_id).strip().upper().replace("USGS:", "USGS-")
+        key_payload["gauge_id"] = _g if _g.startswith("USGS-") or not _g.isdigit() else f"USGS-{_g}"
+    if req.basin_ref is not None:
+        # The identity the ref asserts (aliases) matters; hash the whole dict so a changed ref never
+        # reuses an entry resolved under another one.
+        import json as _json
+        key_payload["basin_ref"] = _json.dumps(req.basin_ref, sort_keys=True, default=str)
     if req.outlet is not None:
         # Reach/cell backends select against this point, which can differ for
         # two requests with the same basin polygon.
-        key_payload["outlet"] = tuple(req.outlet)
+        # Rounded to 1e-7 deg (~1 cm): the same pour point derived by two code paths
+        # (e.g. gauge coordinates from the Water Data API vs legacy waterservices) differs
+        # by ~1e-9 deg and must not split the cache.
+        key_payload["outlet"] = tuple(round(float(c), 7) for c in req.outlet)
     ck = _make_key(key_payload)
 
     history: list[dict[str, str]] = []
@@ -874,7 +919,9 @@ def _fetch_one(
         # them. outlet lets callers pass a delineated pour point instead of the
         # geometry centroid for GEOGLOWS/GloFAS/Open-Meteo snapping (S5).
         data = _call(backend.fetch_timeseries, spec, geom, start, end, _agg,
-                     outlet=getattr(req, "outlet", None))
+                     outlet=getattr(req, "outlet", None),
+                     gauge_id=getattr(req, "gauge_id", None),
+                     basin_ref=getattr(req, "basin_ref", None))
 
     # ── Empty-result gate (S3) ────────────────────────────────────────────────
     # A backend that returns no usable data (e.g. NWIS with no record for the
@@ -1005,6 +1052,8 @@ def fetch_batch(
     native_resolution: bool = False,
     validate: Optional[Callable[[FetchResult], bool]] = None,
     region: Optional[str] = None,
+    gauge_ids: Optional[Mapping[str, str]] = None,
+    basin_refs: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> dict[str, Any]:
     """
     Fetch one variable for multiple geometries in parallel.
@@ -1040,6 +1089,9 @@ def fetch_batch(
         used to be silently dropped on the batch path.) ``outlet`` is a single
         point and is deliberately not accepted here; fetch() refuses it for
         collections.
+    gauge_ids, basin_refs
+        ``{label: site}`` / ``{label: BasinRef}`` per-item USGS gauge identity (see fetch()).
+        Labels without an entry get none.
 
     Returns
     -------
@@ -1084,6 +1136,8 @@ def fetch_batch(
             native_resolution=native_resolution,
             validate=validate,
             region=region,
+            gauge_id=(gauge_ids or {}).get(label),
+            basin_ref=(basin_refs or {}).get(label),
         )
         return label, result
 

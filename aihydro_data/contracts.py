@@ -152,6 +152,9 @@ class FetchRequest(BaseModel):
     region: Optional[str] = None       # skip auto region detection (a CoverageTag)
     outlet: Optional[tuple[float, float]] = None  # (lat, lon) snap target for
     #                                              reach/gauge backends
+    # Gauge identity (NWIS), ADR-003 A2 R0: explicit id > BasinRef usgs: alias > outlet.
+    gauge_id: Optional[str] = None
+    basin_ref: Optional[dict[str, Any]] = None
 
     # Internal — filled in by the router, not the user
     detected_region: Optional[str] = None

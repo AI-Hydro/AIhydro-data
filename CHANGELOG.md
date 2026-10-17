@@ -3,7 +3,18 @@
 All notable changes to `aihydro-data` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.2.3] — 2026-10-17
+
+### Added - gauge identity through fetch(): `gauge_id=` and `basin_ref=`
+
+- `fetch(..., gauge_id=None, basin_ref=None)`: ADR-003 A2 R0 precedence (explicit id > BasinRef `usgs:` alias >
+  outlet); a polygon is the area basis; for an id or alias a failed area check is a warning on the result and
+  manifest, never a refusal; an id/alias conflict refuses `GAUGE_AMBIGUOUS`. Both enter the cache key.
+  Collections take `{label: value}` mappings (`fetch_batch(gauge_ids=, basin_refs=)`) and refuse a single value
+  (`GAUGE_WITH_COLLECTION`).
+- The `outlet` cache-key component is rounded to 1e-7 degrees (~1 cm), so gauge-derived outlets that differ by
+  ~1e-9 degrees do not split the cache. (Entries written before this release are streamflow-revision 1 and are
+  misses anyway.)
 
 ### Changed - NWIS streamflow comes from the USGS Water Data API; gauge identity is never guessed (Wave U)
 

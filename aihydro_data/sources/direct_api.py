@@ -179,6 +179,8 @@ class Backend(SourceBackend):
         end: str,
         aggregation: AggregationMode,
         outlet: Any = None,
+        gauge_id: Any = None,
+        basin_ref: Any = None,
     ) -> Any:
         """Return a pd.DataFrame with date + variable columns.
 
@@ -188,7 +190,8 @@ class Backend(SourceBackend):
         service = cfg.get("service", "nwis_dv")
 
         if service == "nwis_dv":
-            return self._fetch_nwis_dv(spec, cfg, geometry, start, end, outlet=outlet)
+            return self._fetch_nwis_dv(spec, cfg, geometry, start, end, outlet=outlet,
+                                       gauge_id=gauge_id, basin_ref=basin_ref)
 
         if service == "chirps_iri":
             return self._fetch_chirps_iri(spec, cfg, geometry, start, end)
@@ -220,6 +223,8 @@ class Backend(SourceBackend):
         start: str,
         end: str,
         outlet: Any = None,
+        gauge_id: Any = None,
+        basin_ref: Any = None,
     ) -> Any:
         """USGS daily discharge via the Water Data OGC API.
 
@@ -237,15 +242,18 @@ class Backend(SourceBackend):
         stat_cd = cfg.get("stat_code", "00003")
 
         site_no = _gauge_id_from_geometry(geometry)
-        if site_no is not None:
-            res = uw.resolve_gauge(gauge_id=site_no)
-        else:
-            lonlat = None
-            if outlet is not None:                       # fetch() convention: (lat, lon)
-                lonlat = (float(outlet[1]), float(outlet[0]))
-            elif getattr(geometry, "geom_type", None) == "Point":
-                lonlat = (float(geometry.x), float(geometry.y))
-            res = uw.resolve_gauge(geometry, outlet=lonlat)
+        if site_no is not None and gauge_id is not None and uw._site_id(site_no) != uw._site_id(str(gauge_id)):
+            raise uw._err("GAUGE_AMBIGUOUS", f"the geometry names gauge {uw._site_id(site_no)} but gauge_id= "
+                          f"names {uw._site_id(str(gauge_id))}", "pass one of them", reason="identity_conflict",
+                          candidates=[])
+        explicit = site_no if site_no is not None else (str(gauge_id) if gauge_id is not None else None)
+        area_geom = None if site_no is not None else geometry
+        lonlat = None
+        if outlet is not None:                           # fetch() convention: (lat, lon)
+            lonlat = (float(outlet[1]), float(outlet[0]))
+        elif explicit is None and basin_ref is None and getattr(geometry, "geom_type", None) == "Point":
+            lonlat = (float(geometry.x), float(geometry.y))
+        res = uw.resolve_gauge(area_geom, gauge_id=explicit, basin_ref=basin_ref, outlet=lonlat)
         log.info("NWIS gauge %s resolved by %s (rule %s).", res.site, res.method, res.rule_version)
 
         if os.environ.get("AIHYDRO_USGS_BACKEND", "").strip().lower() == "legacy_waterservices":

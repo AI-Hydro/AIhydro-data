@@ -364,3 +364,108 @@ def test_legacy_path_keeps_genuine_missing_and_flags_negatives(monkeypatch):
     r = pipeline.fetch("streamflow", SITE, "2020-01-01", "2020-01-03", cache=False)
     assert len(r.data) == 2 and r.quality["n_null_values"] == 1 and r.quality["n_negative"] == 1
     assert r.data["negative_flag"].tolist() == [False, True]
+
+
+# ---------------------------------------------------------------- gauge identity through fetch() (A2 R0, T1-T4 end to end)
+def _id_world(monkeypatch, ratio=1.0):
+    from tests.test_usgs_waterdata_contract import _feat
+    b = gw.basin_area(gw.World())
+    w = gw.World([gw.site(1013500, 0, ratio, basin_km2=b)])
+    def transport(url, params=None, headers=None):
+        if "/daily/items" in url:
+            return ok({"features": [_feat("2020-01-01", v="3"), _feat("2020-01-02", v="4")], "links": []})
+        return w(url, params, headers)
+    monkeypatch.setattr(uw, "_http_get", transport)
+    return w
+
+
+def test_T1_gauge_id_with_polygon_through_fetch(monkeypatch):
+    w = _id_world(monkeypatch)
+    r = pipeline.fetch("streamflow", w.basin, "2020-01-01", "2020-01-02", gauge_id="01013500")
+    sr = r.site_resolution
+    assert (sr["method"], sr["site"], sr["area_basis"], sr["area_check"]) == ("explicit_id", "USGS-01013500", "request_geometry", "pass")
+    assert abs(sr["area_ratio"] - 1.0) < 1e-9 and not [c for c in w.calls if "/navigation/" in c]
+    assert _latest(r.cache_key).site_resolution["method"] == "explicit_id"
+
+
+def test_T2_area_mismatch_warns_in_result_and_manifest_never_refuses(monkeypatch):
+    w = _id_world(monkeypatch, ratio=1 / 1.5)
+    r = pipeline.fetch("streamflow", w.basin, "2020-01-01", "2020-01-02", gauge_id="USGS-01013500")
+    assert r.site_resolution["area_check"] == "fail" and r.data is not None and len(r.data) == 2
+    assert any("area_check=fail" in x for x in r.site_resolution["warnings"]) and any("area_check=fail" in n for n in r.notes)
+    assert any("area_check=fail" in x for x in _latest(r.cache_key).site_resolution["warnings"])
+
+
+def test_T3_alias_path_and_unverified_warning(monkeypatch):
+    w = _id_world(monkeypatch)
+    ref = {"aliases": [{"scheme": "usgs", "id": "01013500", "relation": "same_as", "verified": True}]}
+    r = pipeline.fetch("streamflow", w.basin, "2020-01-01", "2020-01-02", basin_ref=ref)
+    assert (r.site_resolution["method"], r.site_resolution["alias_verified"], r.site_resolution["warnings"]) == ("basin_ref_alias", True, [])
+    ref2 = {"aliases": [{"scheme": "usgs", "id": "01013500", "verified": False}]}
+    r2 = pipeline.fetch("streamflow", w.basin, "2020-01-01", "2020-01-02", basin_ref=ref2)
+    assert r2.site_resolution["alias_verified"] is False and r2.cache_key != r.cache_key
+    assert any("not verified" in x for x in r2.site_resolution["warnings"])
+
+
+def test_T4_identity_conflict_is_terminal_end_to_end(monkeypatch):
+    w = _id_world(monkeypatch)
+    _forbid_modelled(monkeypatch)
+    ref = {"aliases": [{"scheme": "usgs", "id": "01646500", "verified": True}]}
+    with pytest.raises(TerminalSourceError) as ei:
+        pipeline.fetch("streamflow", w.basin, "2020-01-01", "2020-01-02", gauge_id="01013500", basin_ref=ref)
+    assert ei.value.code == "GAUGE_AMBIGUOUS" and ei.value.details["reason"] == "identity_conflict"
+    assert [h["outcome"] for h in ei.value.details["fallback_history"]] == ["refused"]
+    with pytest.raises(TerminalSourceError) as e2:                      # geometry names one gauge, gauge_id another
+        pipeline.fetch("streamflow", "01013500", "2020-01-01", "2020-01-02", gauge_id="01646500")
+    assert e2.value.details["reason"] == "identity_conflict"
+
+
+def test_gauge_identity_is_in_the_cache_key(monkeypatch):
+    w = _id_world(monkeypatch)
+    a = pipeline.fetch("streamflow", w.basin, "2020-01-01", "2020-01-02", gauge_id="01013500", cache=False).cache_key
+    b = pipeline.fetch("streamflow", w.basin, "2020-01-01", "2020-01-02", gauge_id="USGS-01013500", cache=False).cache_key
+    assert a == b
+    d = pipeline.fetch("streamflow", w.basin, "2020-01-01", "2020-01-02", outlet=(gw.LAT0, gw.LON0), cache=False).cache_key
+    assert a != d
+
+
+def test_collection_requires_per_item_identity(monkeypatch):
+    with pytest.raises(GeometryInvalid) as ei:
+        pipeline.fetch("streamflow", ["03245500", "01646500"], "2020-01-01", "2020-01-02", gauge_id="03245500")
+    assert ei.value.code == "GAUGE_WITH_COLLECTION"
+    with pytest.raises(GeometryInvalid):                                  # one BasinRef is not a per-item mapping
+        pipeline.fetch("streamflow", ["03245500", "01646500"], "2020-01-01", "2020-01-02",
+                       basin_ref={"aliases": [{"scheme": "usgs", "id": "03245500"}]})
+    got = {}
+    def fake_batch(variable, geometries, start, end, **kw):
+        got.update(kw)
+        return {"results": {}, "errors": {}, "labels": [], "variable": variable, "start": start, "end": end}
+    monkeypatch.setattr(pipeline, "fetch_batch", fake_batch)
+    pipeline.fetch("streamflow", {"a": "03245500", "b": "01646500"}, "2020-01-01", "2020-01-02",
+                   gauge_id={"a": "03245500"}, basin_ref={"b": {"aliases": []}})
+    assert got["gauge_ids"] == {"a": "03245500"} and got["basin_refs"] == {"b": {"aliases": []}}
+
+
+def test_batch_forwards_per_label_identity(monkeypatch):
+    seen = {}
+    def fake_fetch(variable, geom, start, end, **kw):
+        seen[str(geom)] = (kw.get("gauge_id"), kw.get("basin_ref"))
+        raise RuntimeError("stop")
+    monkeypatch.setattr(pipeline, "fetch", fake_fetch)
+    pipeline.fetch_batch("streamflow", {"a": Point(0, 0), "b": Point(1, 1)}, "2020-01-01", "2020-01-02",
+                         gauge_ids={"a": "03245500"}, basin_refs={"b": {"aliases": []}}, on_error="skip")
+    assert seen[str(Point(0, 0))] == ("03245500", None) and seen[str(Point(1, 1))] == (None, {"aliases": []})
+
+
+def test_outlet_cache_key_is_rounded_to_1e_minus_7(monkeypatch):
+    w = _id_world(monkeypatch)
+    lat, lon = gw.LAT0, gw.LON0
+    a = pipeline.fetch("streamflow", w.basin, "2020-01-01", "2020-01-02", outlet=(lat, lon), gauge_id="01013500", cache=False).cache_key
+    b = pipeline.fetch("streamflow", w.basin, "2020-01-01", "2020-01-02", outlet=(lat + 2e-9, lon - 2e-9), gauge_id="01013500", cache=False).cache_key
+    c = pipeline.fetch("streamflow", w.basin, "2020-01-01", "2020-01-02", outlet=(lat + 1e-6, lon), gauge_id="01013500", cache=False).cache_key
+    assert a == b and a != c
+
+
+def test_version_is_0_2_3():
+    from aihydro_data._version import __version__
+    assert __version__ == "0.2.3"
