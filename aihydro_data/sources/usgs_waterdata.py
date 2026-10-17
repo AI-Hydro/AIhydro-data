@@ -221,7 +221,9 @@ _DRAINAGE_UNITS = ("unstated (USGS documents square miles; the OpenAPI schema st
 
 
 def _site_id(site: str) -> str:
-    s = str(site).strip()
+    if not isinstance(site, str):
+        raise _err("USGS_SITE_INVALID", f"a USGS site number must be a string (leading zeros matter), got {type(site).__name__}")
+    s = site.strip()
     if s.upper().startswith("USGS-"):
         s = s[5:]
     if not re.fullmatch(r"[0-9]{8,15}", s):
@@ -288,10 +290,13 @@ def _request(url: str, params: Optional[Mapping[str, Any]], record: dict) -> dic
             code = "USGS_INVALID_QUERY"
         else:
             code = "USGS_HTTP_ERROR"
+        auth_hint = ("USGS rejected the credentials or the request is not permitted: set a valid api.data.gov key "
+                     "in API_USGS_PAT (sent only as the X-Api-Key header), or unset it if it is stale"
+                     if status in (401, 403) else "")
         raise _err(code, f"HTTP {status} from {urlparse(url).path}: "
                          f"{detail.get('description') if isinstance(detail, dict) else detail}",
                    "adjust the query (e.g. continuous windows must be <= 1100 days)"
-                   if code == "USGS_INVALID_QUERY" else "retry later" if code == "USGS_SERVER_ERROR" else "",
+                   if code == "USGS_INVALID_QUERY" else "retry later" if code == "USGS_SERVER_ERROR" else auth_hint,
                    status=status, body=detail)
     record["request_urls"].append(_canonical(url, params))
     record["response_sha256"].append(hashlib.sha256(body).hexdigest())
@@ -880,7 +885,8 @@ def resolve_gauge(geometry=None, *, gauge_id: Optional[str] = None, basin_ref: O
         return g
 
     if gauge_id:
-        return _named(gauge_id, "explicit_id", None)
+        # an agreeing alias is not ignored: its verification status is recorded too
+        return _named(gauge_id, "explicit_id", alias_ver if alias_site else None)
     if alias_site:
         return _named(alias_site, "basin_ref_alias", alias_ver)
 

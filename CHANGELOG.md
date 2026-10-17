@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.2.3] — 2026-10-17
 
+Wave U summary (data layer). **U1a:** new `sources/usgs_waterdata.py` for the USGS Water Data OGC API
+(daily, continuous, time-series metadata, monitoring locations), written against 79 recorded responses
+under `tests/fixtures/usgs_waterdata/` (including the last-chance legacy waterservices bytes); strict value,
+approval and qualifier handling, no redirects, https-only. **U1b:** `NWIS_STREAMFLOW` wired through it, the
+centroid gauge walk replaced by ADR-003 amendment A2 (`resolve_gauge`), terminal refusals that never fall
+through to modelled flow, `site_resolution`/`quality`/`upstream` on `FetchResult` and the manifest, cache
+sha256 + provisional TTL, `fetch(gauge_id=, basin_ref=)`. Review rounds fixed: key leakage across redirects,
+silent value coercion, branch-dependent network distance, Unicode digits, and several coded-error gaps.
+Decisions are in `DECISIONS.md` (2026-10-17).
+
 ### Added - gauge identity through fetch(): `gauge_id=` and `basin_ref=`
 
 - `fetch(..., gauge_id=None, basin_ref=None)`: ADR-003 A2 R0 precedence (explicit id > BasinRef `usgs:` alias >

@@ -469,3 +469,44 @@ def test_outlet_cache_key_is_rounded_to_1e_minus_7(monkeypatch):
 def test_version_is_0_2_3():
     from aihydro_data._version import __version__
     assert __version__ == "0.2.3"
+
+
+# ---------------------------------------------------------------- final polish
+def test_batch_rejects_identity_keys_that_match_no_label():
+    with pytest.raises(GeometryInvalid) as ei:
+        pipeline.fetch_batch("streamflow", {"a": Point(0, 0)}, "2020-01-01", "2020-01-02", gauge_ids={"typo": "03245500"})
+    assert ei.value.code == "GAUGE_LABEL_UNKNOWN"
+    with pytest.raises(GeometryInvalid) as e2:
+        pipeline.fetch_batch("streamflow", {"a": Point(0, 0)}, "2020-01-01", "2020-01-02", basin_refs={"b": {"aliases": []}})
+    assert e2.value.code == "GAUGE_LABEL_UNKNOWN"
+
+
+def test_agreeing_explicit_id_and_alias_records_alias_verified(monkeypatch):
+    w = _id_world(monkeypatch)
+    ref = {"aliases": [{"scheme": "usgs", "id": "01013500", "verified": True}]}
+    r = pipeline.fetch("streamflow", w.basin, "2020-01-01", "2020-01-02", gauge_id="01013500", basin_ref=ref)
+    assert r.site_resolution["method"] == "explicit_id" and r.site_resolution["alias_verified"] is True
+
+
+@pytest.mark.parametrize("bad", [1013500, 13500000, 3.5, ["01013500"]])
+def test_non_string_gauge_id_is_a_coded_refusal(bad):
+    with pytest.raises(GeometryInvalid) as ei:
+        pipeline.fetch("streamflow", Point(-90, 40).buffer(0.1), "2020-01-01", "2020-01-02", gauge_id=bad)
+    assert ei.value.code == "GAUGE_ID_INVALID"
+    with pytest.raises(SourceUnavailable) as e2:
+        uw.resolve_gauge(gauge_id=bad)
+    assert e2.value.code == "USGS_SITE_INVALID"
+
+
+def test_non_mapping_basin_ref_is_a_coded_refusal():
+    with pytest.raises(GeometryInvalid) as ei:
+        pipeline.fetch("streamflow", "01013500", "2020-01-01", "2020-01-02", basin_ref="usgs:01013500")
+    assert ei.value.code == "GAUGE_REF_INVALID"
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_auth_failures_are_terminal_and_name_the_key(monkeypatch, status):
+    monkeypatch.setattr(uw, "_http_get", lambda *a, **k: (status, {}, b'{"error":"denied"}'))
+    with pytest.raises(TerminalSourceError) as ei:
+        uw._request(uw.BASE + "/collections/daily/items", {"f": "json"}, uw._new_record())
+    assert ei.value.code == "USGS_HTTP_ERROR" and "API_USGS_PAT" in ei.value.recovery

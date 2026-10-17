@@ -279,6 +279,19 @@ def fetch(
             key and are ignored by non-NWIS products. For collections pass a
             ``{label: value}`` mapping, or call per geometry.
     """
+    if gauge_id is not None and not isinstance(gauge_id, (str, Mapping)):
+        from aihydro_data.exceptions import GeometryInvalid
+        raise GeometryInvalid(
+            code="GAUGE_ID_INVALID",
+            message=f"gauge_id must be a string such as '01013500' (leading zeros matter), got {type(gauge_id).__name__}.",
+            recovery="Pass the USGS site number as a string.", next_tools=["data_help"], docs_anchor="streamflow#nwis",
+        )
+    if basin_ref is not None and not isinstance(basin_ref, Mapping):
+        from aihydro_data.exceptions import GeometryInvalid
+        raise GeometryInvalid(
+            code="GAUGE_REF_INVALID", message=f"basin_ref must be a BasinRef dict, got {type(basin_ref).__name__}.",
+            recovery="Pass BasinRef.to_dict().", next_tools=["data_help"], docs_anchor="streamflow#nwis",
+        )
     # ── -1. Normalise variable name (alias table + lower/strip) ──────────
     variable = _normalise_variable(variable)
 
@@ -1108,6 +1121,18 @@ def fetch_batch(
     from aihydro_data.geometry.batch import iter_geometries
 
     pairs = list(iter_geometries(geometries))
+    _labels = {p[0] for p in pairs}
+    for _name, _m in (("gauge_ids", gauge_ids), ("basin_refs", basin_refs)):
+        _unknown = sorted(str(k) for k in (_m or {}) if k not in _labels)
+        if _unknown:
+            from aihydro_data.exceptions import GeometryInvalid
+            raise GeometryInvalid(
+                code="GAUGE_LABEL_UNKNOWN",
+                message=f"{_name} has keys that match no geometry label: {_unknown} (labels: {sorted(_labels)}). "
+                        "Silently ignoring them would fetch those items without the identity you gave.",
+                recovery="Key the mapping by the geometry labels.",
+                next_tools=["data_help"], docs_anchor="batch",
+            )
     if not pairs:
         return {"results": {}, "errors": {}, "labels": [], "variable": variable,
                 "start": start, "end": end}
