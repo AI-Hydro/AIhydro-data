@@ -301,8 +301,17 @@ def test_gt_1100_day_400_is_parsed(replay):
 
 
 # ------------------------------------------------------------- continuous
-def test_continuous_7d_is_utc_and_provisional(replay):
+def test_continuous_7d_is_utc_and_provisional(monkeypatch):
+    # A date-only END is inclusive (23:59:59Z), so the request differs from the recorded
+    # (exclusive) one; serve the recorded 7-day body for it and assert the window sent.
+    sent = []
+    def ov(url, params):
+        if "/continuous/items" in url:
+            sent.append(params["time"])
+            return 200, dict(INDEX["continuous_01013500_7d"]["headers"]), body("continuous_01013500_7d")
+    monkeypatch.setattr(uw, "_http_get", Replay(ov))
     s = uw.get_continuous("01013500", "2026-10-10", "2026-10-17")
+    assert sent == ["2026-10-10T00:00:00Z/2026-10-17T23:59:59Z"]
     assert len(s.frame) == 673 and str(s.frame["time"].dt.tz) == "UTC"
     assert s.time_series_id == "cdaf3cebfd0e49ebbe16231e6cd947e0"
     assert s.quality_summary["approval_counts"] == {"Provisional": 673} and s.quality_summary["provisional_fraction"] == 1.0
@@ -319,7 +328,7 @@ def test_continuous_is_chunked_below_1100_days_and_boundaries_dedupe(monkeypatch
     s = uw.get_continuous("01013500", "2020-01-01", "2024-01-01")
     spans = [(pd.Timestamp(b) - pd.Timestamp(a)).days for a, b in seen]
     assert len(seen) == 2 and max(spans) <= 1100 and seen[0][1] == seen[1][0] and seen[0][0] == "2020-01-01T00:00:00Z"
-    assert seen[-1][1] == "2024-01-01T00:00:00Z"
+    assert seen[-1][1] == "2024-01-01T23:59:59Z"
     assert len(s.frame) == 3                    # shared boundary instant appears once
 
 
@@ -438,3 +447,257 @@ def test_values_and_codes_match_legacy_dv(replay, site, _new, legacy, a, b):
         if q - {"A", "P", "e"}:
             diffs.append((t, "legacy-only-qualifier", sorted(q), row["qualifier"]))
     assert not diffs, f"{len(diffs)} differences vs legacy dv, first: {diffs[:5]}"
+
+
+# ============================================================ U1a review fixes
+import requests  # noqa: E402
+from requests.adapters import BaseAdapter  # noqa: E402
+
+from aihydro_data.exceptions import TerminalSourceError  # noqa: E402
+
+
+class FakeWire(BaseAdapter):
+    """Mounted on a real requests.Session: exercises the REAL _http_get (redirect, scheme,
+    host, header handling) with no network."""
+
+    def __init__(self, responder):
+        super().__init__()
+        self.responder = responder
+        self.seen: list = []
+
+    def send(self, request, **kw):
+        self.seen.append((request.url, dict(request.headers), kw.get("allow_redirects")))
+        r = self.responder(request)
+        if isinstance(r, Exception):
+            raise r
+        status, headers, content = r
+        resp = requests.Response()
+        resp.status_code, resp.headers, resp._content, resp.url = status, requests.structures.CaseInsensitiveDict(headers), content, request.url
+        resp.request = request
+        return resp
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def wire(monkeypatch):
+    def make(responder):
+        w = FakeWire(responder)
+        sess = requests.Session()
+        sess.mount("https://", w); sess.mount("http://", w)
+        monkeypatch.setattr(uw, "_session", lambda: sess)
+        return w
+    return make
+
+
+WD_URL = uw.BASE + "/collections/daily/items"
+NLDI_URL = uw.NLDI_BASE + "/comid/position"
+
+
+def test_real_seam_key_only_to_waterdata_host(wire, monkeypatch):
+    monkeypatch.setenv("API_USGS_PAT", "TEST-KEY-NOT-REAL")
+    w = wire(lambda r: (200, {}, b"{}"))
+    uw._http_get(WD_URL, {"f": "json"})
+    uw._http_get(NLDI_URL, {"f": "json"})
+    (u1, h1, _), (u2, h2, _) = w.seen
+    assert h1.get("X-Api-Key") == "TEST-KEY-NOT-REAL" and "X-Api-Key" not in h2
+
+
+def test_real_seam_never_follows_redirects(wire, monkeypatch):
+    monkeypatch.setenv("API_USGS_PAT", "TEST-KEY-NOT-REAL")
+    w = wire(lambda r: (302, {"Location": "https://api.water.usgs.gov/elsewhere"}, b""))
+    assert uw._http_get(WD_URL, {"f": "json"})[0] == 302
+    assert len(w.seen) == 1                                      # the 302 was not followed
+    with pytest.raises(SourceUnavailable) as ei:
+        uw._request(WD_URL, {"f": "json"}, uw._new_record())
+    assert ei.value.code == "USGS_HTTP_REDIRECT" and not isinstance(ei.value, TerminalSourceError)
+    assert len(w.seen) == 2                                      # still one request each, never a hop
+
+
+@pytest.mark.parametrize("url,code", [
+    ("http://api.waterdata.usgs.gov/ogcapi/v1/collections/daily/items", "USGS_URL_REFUSED"),
+    ("https://example.org/x", "USGS_HOST_NOT_ALLOWED"),
+    ("https://waterservices.usgs.gov/nwis/dv/", "USGS_HOST_NOT_ALLOWED"),
+    ("ftp://api.waterdata.usgs.gov/x", "USGS_URL_REFUSED"),
+])
+def test_real_seam_scheme_and_host_refused_before_the_wire(wire, url, code):
+    w = wire(lambda r: (200, {}, b"{}"))
+    with pytest.raises(SourceUnavailable) as ei:
+        uw._http_get(url)
+    assert ei.value.code == code and w.seen == []
+
+
+def test_http_next_link_is_refused_before_it_is_requested(wire):
+    page = {"features": [], "links": [{"rel": "next", "href": "http://api.waterdata.usgs.gov/ogcapi/v1/x?cursor=a"}]}
+    w = wire(lambda r: (200, {}, json.dumps(page).encode()))
+    with pytest.raises(SourceUnavailable) as ei:
+        uw._paged_features(WD_URL, {"f": "json"}, uw._new_record())
+    assert ei.value.code == "USGS_URL_REFUSED" and len(w.seen) == 1
+
+
+def test_repeated_next_link_is_a_runaway(monkeypatch):
+    nxt = uw.BASE + "/collections/daily/items?cursor=a"
+    page = {"features": [], "links": [{"rel": "next", "href": nxt}]}
+    monkeypatch.setattr(uw, "_http_get", lambda u, p=None, h=None: ok(page))
+    with pytest.raises(SourceUnavailable) as ei:
+        uw._paged_features(WD_URL, {"f": "json"}, uw._new_record())
+    assert ei.value.code == "USGS_PAGING_RUNAWAY"
+
+
+@pytest.mark.parametrize("responder,code,terminal", [
+    (lambda r: requests.exceptions.Timeout("t"), "USGS_TIMEOUT", False),
+    (lambda r: requests.exceptions.ConnectionError("c"), "USGS_UNREACHABLE", False),
+    (lambda r: (503, {}, b"{}"), "USGS_SERVER_ERROR", False),
+    (lambda r: (404, {}, b"{}"), "USGS_HTTP_ERROR", False),
+    (lambda r: (429, {"Retry-After": "5"}, b"{}"), "USGS_RATE_LIMITED", False),
+])
+def test_transport_failures_map_to_distinct_non_terminal_codes(wire, responder, code, terminal):
+    wire(responder)
+    with pytest.raises(SourceUnavailable) as ei:
+        uw._request(WD_URL, {"f": "json"}, uw._new_record())
+    assert ei.value.code == code and isinstance(ei.value, TerminalSourceError) is terminal
+
+
+def test_refusals_are_terminal_and_unavailability_is_not(monkeypatch):
+    monkeypatch.setattr(uw, "_http_get", Replay(lambda u, p: ok({"features": [_feat("2020-01-01", ap="X")], "links": []})))
+    with pytest.raises(TerminalSourceError):
+        uw.get_daily("01013500", "2020-01-01", "2020-01-01")
+    assert uw.TERMINAL_CODES.isdisjoint(uw.TRANSIENT_CODES)
+
+
+# ---- strict values
+def _one(monkeypatch, **kw):
+    monkeypatch.setattr(uw, "_http_get", Replay(lambda u, p: ok({"features": [_feat("2020-01-01", **kw)], "links": []})))
+    return uw.get_daily("01013500", "2020-01-01", "2020-01-01")
+
+
+@pytest.mark.parametrize("v", ["NaN", "nan", "Infinity", "-Infinity", "1e400", " 3 ", "3 ", "", "0x10", "1,5", 3, 3.5, True, ["3"]])
+def test_non_plain_values_are_refused(monkeypatch, v):
+    with pytest.raises(TerminalSourceError) as ei:
+        _one(monkeypatch, v=v)
+    assert ei.value.code == "USGS_VALUE_UNPARSEABLE"
+
+
+@pytest.mark.parametrize("v", ["-999999", "-999999.0", "-999999.00"])
+def test_legacy_sentinel_is_refused(monkeypatch, v):
+    with pytest.raises(TerminalSourceError) as ei:
+        _one(monkeypatch, v=v)
+    assert ei.value.code == "USGS_VALUE_SENTINEL"
+
+
+def test_negative_values_are_flagged_not_converted_or_dropped(monkeypatch):
+    monkeypatch.setattr(uw, "_http_get", Replay(lambda u, p: ok({"features": [_feat("2020-01-01", v="-2.5"), _feat("2020-01-02", v="1e2")], "links": []})))
+    s = uw.get_daily("01013500", "2020-01-01", "2020-01-02")
+    assert s.frame["value_native"].tolist() == [-2.5, 100.0] and s.frame["negative_flag"].tolist() == [True, False]
+    assert s.quality_summary["n_negative"] == 1 and s.frame["value_m3s"].iloc[0] == -2.5 * 0.028316846592
+
+
+@pytest.mark.parametrize("q", ["ESTIMATED", {"a": 1}, [1], ["ok", None], 7])
+def test_non_list_qualifier_is_refused(monkeypatch, q):
+    with pytest.raises(TerminalSourceError) as ei:
+        _one(monkeypatch, q=q)
+    assert ei.value.code == "USGS_QUALIFIER_INVALID"
+
+
+def test_provisional_values_match_the_raw_json(replay):
+    raw = {f["properties"]["time"]: f["properties"] for f in doc("daily_01013500_last120d_provisional")["features"]}
+    s = uw.get_daily("01013500", "2026-06-19", "2026-10-17")
+    prov = s.frame[s.frame["approval_code"] == "P"]
+    assert len(prov) == 43
+    for _, r in prov.iterrows():
+        p = raw[r["time"].strftime("%Y-%m-%d")]
+        assert p["approval_status"] == "Provisional"
+        assert r["value_native"] == float(p["value"]) and r["value_m3s"] == float(p["value"]) * 0.028316846592
+    assert all(float(p["value"]) > 0 for p in raw.values())          # the fixture is non-trivial
+
+
+# ---- completeness facts
+def test_daily_reports_expected_and_missing_days(replay, monkeypatch):
+    s = uw.get_daily("01013500", "1989-10-01", "2009-09-30")
+    assert (s.quality_summary["n_expected"], s.quality_summary["n_missing"]) == (7305, 0)
+    monkeypatch.setattr(uw, "_http_get", Replay(lambda u, p: ok({"features": [_feat("2020-01-01"), _feat("2020-01-04")], "links": []})))
+    g = uw.get_daily("01013500", "2020-01-01", "2020-01-05")
+    assert (g.quality_summary["n_expected"], g.quality_summary["n_missing"]) == (5, 3)
+
+
+def test_continuous_reports_gap_statistics(monkeypatch):
+    def ov(url, params):
+        ts = ["2026-03-08T06:00:00+00:00", "2026-03-08T06:15:00+00:00", "2026-03-08T06:30:00+00:00", "2026-03-08T08:30:00+00:00"]
+        return ok({"features": [_feat(t, ts="c") for t in ts], "links": []})
+    monkeypatch.setattr(uw, "_http_get", Replay(ov))
+    s = uw.get_continuous("01013500", "2026-03-08", "2026-03-08")
+    q = s.quality_summary
+    assert q["median_step_s"] == 900.0 and q["max_gap_s"] == 7200.0 and q["n_gaps_gt_2x_median"] == 1
+
+
+# ---- time zones
+def test_continuous_offsets_are_converted_to_utc_and_naive_is_refused(monkeypatch):
+    # US DST starts 2026-03-08 02:00 local: 06:30-05:00 and 07:30-04:00 are the instants either side.
+    ts = ["2026-03-08T01:30:00-05:00", "2026-03-08T03:30:00-04:00"]
+    monkeypatch.setattr(uw, "_http_get", Replay(lambda u, p: ok({"features": [_feat(t, ts="c") for t in ts], "links": []})))
+    s = uw.get_continuous("01013500", "2026-03-08", "2026-03-08")
+    assert [t.isoformat() for t in s.frame["time"]] == ["2026-03-08T06:30:00+00:00", "2026-03-08T07:30:00+00:00"]
+    monkeypatch.setattr(uw, "_http_get", Replay(lambda u, p: ok({"features": [_feat("2026-03-08T02:30:00", ts="c")], "links": []})))
+    with pytest.raises(TerminalSourceError) as ei:
+        uw.get_continuous("01013500", "2026-03-08", "2026-03-08")
+    assert ei.value.code == "USGS_TIME_NAIVE"
+
+
+def test_continuous_chunk_conflict_has_its_own_code(monkeypatch):
+    n = {"i": 0}
+    def ov(url, params):
+        n["i"] += 1
+        a, b = params["time"].split("/")
+        return ok({"features": [_feat(b.replace("Z", "+00:00"), ts="c", v=str(n["i"]))], "links": []})
+    monkeypatch.setattr(uw, "_http_get", Replay(ov))
+    # chunk 1's last instant == chunk 2's first window end? make them collide on the shared boundary
+    def ov2(url, params):
+        a, b = params["time"].split("/")
+        first = a.startswith("2020-01-01")
+        t = "2022-12-31T00:00:00+00:00"                      # the shared boundary (2020-01-01 + 1095 d)
+        return ok({"features": [_feat(t, ts="c", v="1" if first else "2")], "links": []})
+    monkeypatch.setattr(uw, "_http_get", Replay(ov2))
+    with pytest.raises(TerminalSourceError) as ei:
+        uw.get_continuous("01013500", "2020-01-01", "2024-01-01")
+    assert ei.value.code == "USGS_CHUNK_CONFLICT"
+
+
+def test_chunk_boundary_ignores_last_modified(monkeypatch):
+    def ov(url, params):
+        a, _ = params["time"].split("/")
+        return ok({"features": [_feat("2022-12-31T00:00:00+00:00", ts="c", lm=("x" if a.startswith("2020") else "y"))], "links": []})
+    monkeypatch.setattr(uw, "_http_get", Replay(ov))
+    assert len(uw.get_continuous("01013500", "2020-01-01", "2024-01-01").frame) == 1
+
+
+# ---- locations
+def test_location_id_lookup_that_finds_nothing_refuses(monkeypatch):
+    monkeypatch.setattr(uw, "_http_get", Replay(lambda u, p: ok(EMPTY)))
+    with pytest.raises(TerminalSourceError) as ei:
+        uw.get_monitoring_locations(ids=["00000000"])
+    assert ei.value.code == "USGS_SITE_NOT_FOUND"
+
+
+def test_empty_bbox_is_an_attributable_empty_result(monkeypatch):
+    monkeypatch.setattr(uw, "_http_get", Replay(lambda u, p: ok(EMPTY)))
+    r = uw.get_monitoring_locations(bbox=[0.0, 0.0, 0.1, 0.1])
+    assert len(r) == 0 and r.upstream["request_urls"] and r.upstream["response_sha256"]
+
+
+@pytest.mark.parametrize("geom", [None, {"type": "Point"}, {"type": "Point", "coordinates": []}])
+def test_location_without_geometry_is_a_structured_error(monkeypatch, geom):
+    f = {"type": "Feature", "properties": {"id": "USGS-01013500"}, "geometry": geom}
+    monkeypatch.setattr(uw, "_http_get", Replay(lambda u, p: ok({"features": [f], "links": []})))
+    with pytest.raises(SourceUnavailable) as ei:
+        uw.get_monitoring_locations(ids=["01013500"])
+    assert ei.value.code == "USGS_BAD_BODY"
+
+
+# ---- fixtures
+def test_legacy_index_matches_the_legacy_bytes():
+    import hashlib
+    for e in LEGACY_INDEX.values():
+        raw = _read(LEGACY / e["file"])
+        assert hashlib.sha256(raw).hexdigest() == e["body_sha256"], e["name"]
+        assert "api_key" not in e["url"].lower()

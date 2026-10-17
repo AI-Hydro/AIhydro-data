@@ -39,7 +39,7 @@ from urllib.parse import urlencode, urlparse
 
 import pandas as pd
 
-from aihydro_data.exceptions import AihydroDataError, SourceUnavailable
+from aihydro_data.exceptions import AihydroDataError, SourceUnavailable, TerminalSourceError
 
 BASE = "https://api.waterdata.usgs.gov/ogcapi/v1"
 NLDI_BASE = "https://api.water.usgs.gov/nldi/linked-data"
@@ -62,25 +62,62 @@ _MAX_PAGES = 200
 
 
 # ---------------------------------------------------------------- errors
+# Identity / integrity refusals: terminal (TerminalSourceError), never answered by a
+# modelled product. Everything else - HTTP errors, rate limits, timeouts, unreachable
+# host, 5xx, bad bodies - means "could not look" and stays a plain SourceUnavailable
+# (transient codes: USGS_TIMEOUT, USGS_UNREACHABLE, USGS_SERVER_ERROR, USGS_RATE_LIMITED).
+TERMINAL_CODES = frozenset({
+    "GAUGE_REQUIRED", "GAUGE_NOT_FOUND", "GAUGE_AMBIGUOUS",
+    "USGS_SITE_INVALID", "USGS_SITE_NOT_FOUND", "USGS_NO_DATA", "USGS_MULTIPLE_SERIES",
+    "USGS_APPROVAL_UNKNOWN", "USGS_UNIT_UNKNOWN", "USGS_VALUE_UNPARSEABLE", "USGS_VALUE_SENTINEL",
+    "USGS_DUPLICATE_TIME", "USGS_CHUNK_CONFLICT", "USGS_QUALIFIER_INVALID", "USGS_TIME_NAIVE",
+})
+TRANSIENT_CODES = frozenset({"USGS_TIMEOUT", "USGS_UNREACHABLE", "USGS_SERVER_ERROR", "USGS_RATE_LIMITED"})
+
+
 def _err(code: str, message: str, recovery: str = "", **details: Any) -> SourceUnavailable:
-    return SourceUnavailable(code=code, message=message, recovery=recovery, details=dict(details))
+    cls = TerminalSourceError if code in TERMINAL_CODES else SourceUnavailable
+    return cls(code=code, message=message, recovery=recovery, details=dict(details))
 
 
 # ---------------------------------------------------------------- transport
+def _session():
+    """Factory for the requests session (tests mount an in-process adapter here)."""
+    import requests
+    return requests.Session()
+
+
+def _check_url(url: str) -> None:
+    u = urlparse(url)
+    if u.scheme != "https":
+        raise _err("USGS_URL_REFUSED", f"refusing non-https URL (scheme {u.scheme!r})")
+    if u.hostname not in _ALLOWED_HOSTS:
+        raise _err("USGS_HOST_NOT_ALLOWED", f"refusing request to {u.hostname!r}")
+
+
 def _http_get(url: str, params: Optional[Mapping[str, Any]] = None,
               headers: Optional[Mapping[str, str]] = None) -> tuple[int, dict, bytes]:
-    """The ONLY network call in this module. Returns (status, headers, body)."""
+    """The ONLY network call in this module. Returns (status, headers, body).
+
+    https and the host allow-list are enforced here, per request. Redirects are NEVER
+    followed (requests would forward ``X-Api-Key`` across hosts); a 3xx is returned to
+    the caller, which treats it as an error. Timeouts / connection failures map to
+    transient SourceUnavailable codes."""
     import requests  # local: keeps import cost off non-USGS paths
 
+    _check_url(url)
     host = urlparse(url).hostname
-    if host not in _ALLOWED_HOSTS:
-        raise _err("USGS_HOST_NOT_ALLOWED", f"refusing request to {host!r}")
     h = {"User-Agent": "aihydro-data/usgs_waterdata", "Accept": "application/json"}
     key = os.environ.get("API_USGS_PAT")
     if key and host == "api.waterdata.usgs.gov":
         h["X-Api-Key"] = key
     h.update(headers or {})
-    r = requests.get(url, params=params, headers=h, timeout=120)
+    try:
+        r = _session().get(url, params=params, headers=h, timeout=120, allow_redirects=False)
+    except requests.exceptions.Timeout as e:
+        raise _err("USGS_TIMEOUT", f"timeout talking to {host}", "retry later") from e
+    except requests.exceptions.ConnectionError as e:
+        raise _err("USGS_UNREACHABLE", f"cannot reach {host}", "check the network / retry later") from e
     return r.status_code, dict(r.headers), r.content
 
 
@@ -183,12 +220,18 @@ def _request(url: str, params: Optional[Mapping[str, Any]], record: dict) -> dic
             detail = json.loads(body)
         except Exception:
             detail = body[:300].decode("utf-8", "replace")
-        code = "USGS_INVALID_QUERY" if (status == 400 and isinstance(detail, dict)
-                                        and detail.get("code") == "InvalidQuery") else "USGS_HTTP_ERROR"
+        if 300 <= status < 400:
+            code = "USGS_HTTP_REDIRECT"            # never followed: the key would travel with it
+        elif status >= 500:
+            code = "USGS_SERVER_ERROR"
+        elif status == 400 and isinstance(detail, dict) and detail.get("code") == "InvalidQuery":
+            code = "USGS_INVALID_QUERY"
+        else:
+            code = "USGS_HTTP_ERROR"
         raise _err(code, f"HTTP {status} from {urlparse(url).path}: "
                          f"{detail.get('description') if isinstance(detail, dict) else detail}",
                    "adjust the query (e.g. continuous windows must be <= 1100 days)"
-                   if code == "USGS_INVALID_QUERY" else "retry later",
+                   if code == "USGS_INVALID_QUERY" else "retry later" if code == "USGS_SERVER_ERROR" else "",
                    status=status, body=detail)
     record["request_urls"].append(_canonical(url, params))
     record["response_sha256"].append(hashlib.sha256(body).hexdigest())
@@ -212,6 +255,7 @@ def _new_record() -> dict:
 def _paged_features(url: str, params: Mapping[str, Any], record: dict) -> list[dict]:
     """Follow ``rel=next`` links (opaque cursor) until exhausted."""
     feats: list[dict] = []
+    seen: set[str] = set()
     doc = _request(url, params, record)
     for _ in range(_MAX_PAGES):
         record["n_pages"] += 1
@@ -219,8 +263,10 @@ def _paged_features(url: str, params: Mapping[str, Any], record: dict) -> list[d
         nxt = next((l.get("href") for l in doc.get("links", []) if l.get("rel") == "next"), None)
         if not nxt:
             return feats
-        if urlparse(nxt).hostname not in _ALLOWED_HOSTS:
-            raise _err("USGS_HOST_NOT_ALLOWED", f"next link points at {urlparse(nxt).hostname!r}")
+        _check_url(nxt)                      # https + host, before any request is made
+        if nxt in seen:
+            raise _err("USGS_PAGING_RUNAWAY", "the server repeated a next link")
+        seen.add(nxt)
         doc = _request(nxt, None, record)
     raise _err("USGS_PAGING_RUNAWAY", f"more than {_MAX_PAGES} pages")
 
@@ -267,8 +313,79 @@ def _empty_outcome(site_id: str, parameter_code: str, statistic_id: Optional[str
                         for f in loc if f["properties"].get("parameter_code") == parameter_code])
 
 
+_VALUE_RE = re.compile(r"-?\d+(\.\d+)?([eE][+-]?\d+)?")
+LEGACY_SENTINEL = -999999.0          # legacy noDataValue; must never reach a discharge series
+
+
+def _parse_value(v: Any, when: Any) -> float:
+    """Strict: a value is a JSON string holding a finite decimal, or null (handled by the
+    caller). No whitespace, no NaN/Infinity words, no JSON numbers or booleans."""
+    if not isinstance(v, str) or not _VALUE_RE.fullmatch(v):
+        raise _err("USGS_VALUE_UNPARSEABLE", f"value {v!r} at {when} is not a plain decimal string")
+    x = float(v)
+    if not math.isfinite(x):
+        raise _err("USGS_VALUE_UNPARSEABLE", f"value {v!r} at {when} is not finite")
+    if x == LEGACY_SENTINEL:
+        raise _err("USGS_VALUE_SENTINEL", f"value {v!r} at {when} is the legacy no-data sentinel",
+                   "this must not be converted to discharge; report it as missing upstream")
+    return x
+
+
+def _parse_qualifier(q: Any, when: Any) -> tuple:
+    if q is None:
+        return ()
+    if not isinstance(q, list) or not all(isinstance(t, str) for t in q):
+        raise _err("USGS_QUALIFIER_INVALID", f"qualifier {q!r} at {when} is not null or a list of strings")
+    return tuple(q)
+
+
+def _has_zone(t: Any) -> bool:
+    return isinstance(t, str) and bool(re.search(r"(Z|[+-]\d{2}:?\d{2})$", t))
+
+
+def _gap_stats(df: pd.DataFrame, continuous: bool, window: Optional[tuple]) -> dict:
+    """Completeness facts. Daily: calendar days expected vs present in the requested window.
+    Continuous: spacing statistics (the API reports no expected cadence)."""
+    out: dict = {}
+    if not continuous:
+        if window is not None:
+            lo, hi = pd.Timestamp(window[0]), pd.Timestamp(window[1])
+            exp = int((hi - lo).days) + 1
+            have = int(df["time"].between(lo, hi).sum())
+            out.update(n_expected=exp, n_missing=max(0, exp - have))
+        return out
+    if len(df) >= 2:
+        steps = df["time"].diff().dropna().dt.total_seconds()
+        med = float(steps.median())
+        out.update(median_step_s=med, max_gap_s=float(steps.max()),
+                   n_gaps_gt_2x_median=int((steps > 2 * med).sum()))
+    return out
+
+
+def summarize_frame(df: pd.DataFrame, *, null_dropped: int = 0) -> dict:
+    """Quality summary of a served frame (needs time, approval_status, approval_code, qualifier).
+    Counts always add up to the number of rows in ``df``."""
+    n = len(df)
+    ac = Counter(df["approval_status"])
+    qc = Counter(t for q in df["qualifier"] for t in q)
+    prov = df.loc[df["approval_code"] == "P", "time"]
+    neg = int((df["value_native"] < 0).sum()) if "value_native" in df.columns else 0
+    return {
+        "n_rows": n,
+        "approval_counts": dict(ac),
+        "qualifier_counts": dict(qc),
+        "qualifiers_other": {t: c for t, c in qc.items() if t not in QUALIFIER_CODES},
+        "n_null_values": int(null_dropped),
+        "n_negative": neg,        # flagged, never converted or dropped (can be real at tidal/backwater sites)
+        "provisional_fraction": (float(ac.get("Provisional", 0)) / n) if n else 0.0,
+        "provisional_first": prov.min().isoformat() if len(prov) else None,
+        "provisional_last": prov.max().isoformat() if len(prov) else None,
+    }
+
+
 def _build(features: list[dict], site_id: str, parameter_code: str, statistic_id: Optional[str],
-           time_series_id: Optional[str], record: dict, continuous: bool) -> UsgsSeries:
+           time_series_id: Optional[str], record: dict, continuous: bool,
+           window: Optional[tuple] = None) -> UsgsSeries:
     if not features:
         raise _empty_outcome(site_id, parameter_code, statistic_id, record)
     ids = sorted({f["properties"].get("time_series_id") for f in features})
@@ -297,24 +414,28 @@ def _build(features: list[dict], site_id: str, parameter_code: str, statistic_id
         if v is None:
             vals.append(float("nan")); nulls += 1
             continue
-        try:
-            vals.append(float(v))
-        except (TypeError, ValueError):
-            raise _err("USGS_VALUE_UNPARSEABLE", f"value {v!r} at {p.get('time')} is not numeric") from None
+        vals.append(_parse_value(v, p.get("time")))
     approvals = [p.get("approval_status") for p in props]
     bad = sorted({str(a) for a in approvals if a not in APPROVAL_CODES})
     if bad:
         raise _err("USGS_APPROVAL_UNKNOWN", f"unrecognised approval_status values: {bad}",
                    "extend APPROVAL_CODES deliberately after reading USGS documentation", values=bad)
-    quals = [tuple(p.get("qualifier") or ()) for p in props]
+    quals = [_parse_qualifier(p.get("qualifier"), p.get("time")) for p in props]
     q_codes = [",".join(QUALIFIER_CODES.get(t, t) for t in q) for q in quals]
 
-    times = pd.to_datetime([p["time"] for p in props], utc=continuous)
+    raw_times = [p["time"] for p in props]
+    if continuous:
+        naive = [t for t in raw_times if not _has_zone(t)]
+        if naive:
+            raise _err("USGS_TIME_NAIVE", f"continuous timestamp without a zone designator: {naive[0]!r}",
+                       "the API documents UTC; a zone-less instant is refused, not assumed")
+    times = pd.to_datetime(raw_times, utc=continuous)
     if not continuous:
         times = pd.DatetimeIndex(times).tz_localize(None)   # daily: calendar date, no zone
     df = pd.DataFrame({
         "time": times,
         "value_native": vals,
+        "negative_flag": [bool(v < 0) for v in vals],
         "approval_status": approvals,
         "approval_code": [APPROVAL_CODES[a] for a in approvals],
         "qualifier": quals,
@@ -325,21 +446,8 @@ def _build(features: list[dict], site_id: str, parameter_code: str, statistic_id
         raise _err("USGS_DUPLICATE_TIME", f"duplicate timestamp {d} within series {chosen}")
     df.insert(2, "value_m3s", to_m3s(df["value_native"], units_native))
 
-    n = len(df)
-    ac = Counter(df["approval_status"])
-    qc = Counter(t for q in df["qualifier"] for t in q)
-    q_other = {t: c for t, c in qc.items() if t not in QUALIFIER_CODES}
-    prov = df.loc[df["approval_code"] == "P", "time"]
-    summary = {
-        "n_rows": n,
-        "approval_counts": dict(ac),
-        "qualifier_counts": dict(qc),
-        "qualifiers_other": q_other,
-        "n_null_values": nulls,
-        "provisional_fraction": float(ac.get("Provisional", 0)) / n,
-        "provisional_first": prov.min().isoformat() if len(prov) else None,
-        "provisional_last": prov.max().isoformat() if len(prov) else None,
-    }
+    summary = summarize_frame(df, null_dropped=nulls)
+    summary.update(_gap_stats(df, continuous, window))
     lm = [p.get("last_modified") for p in props if p.get("last_modified")]
     record["feature_last_modified_max"] = max(lm) if lm else None
     return UsgsSeries(site_id=site_id, time_series_id=chosen, parameter_code=parameter_code,
@@ -357,7 +465,8 @@ def get_daily(site, start, end, parameter_code: str = "00060", statistic_id: str
     if time_series_id:
         p["time_series_id"] = time_series_id
     feats = _paged_features(f"{BASE}/collections/daily/items", p, rec)
-    return _build(feats, sid, parameter_code, statistic_id, time_series_id, rec, continuous=False)
+    return _build(feats, sid, parameter_code, statistic_id, time_series_id, rec, continuous=False,
+                  window=(str(start)[:10], str(end)[:10]))
 
 
 def get_continuous(site, start, end, parameter_code: str = "00060", *,
@@ -365,7 +474,8 @@ def get_continuous(site, start, end, parameter_code: str = "00060", *,
     """Instantaneous values (UTC). Windows are chunked to <= CONTINUOUS_MAX_DAYS."""
     sid = _site_id(site)
     rec = _new_record()
-    t0 = pd.Timestamp(_norm_instant(start)); t1 = pd.Timestamp(_norm_instant(end, end_of_day=False))
+    # A date-only END is inclusive (to 23:59:59Z), like get_daily; a full timestamp is taken as given.
+    t0 = pd.Timestamp(_norm_instant(start)); t1 = pd.Timestamp(_norm_instant(end, end_of_day=True))
     if t1 <= t0:
         raise _err("USGS_BAD_WINDOW", "end must be after start")
     step = pd.Timedelta(days=CONTINUOUS_MAX_DAYS)
@@ -382,50 +492,78 @@ def get_continuous(site, start, end, parameter_code: str = "00060", *,
         a = b
     # Chunk boundaries are inclusive on both sides: drop an instant seen twice only
     # if both copies agree; a disagreement is a data-integrity problem.
-    seen: dict[tuple, str] = {}
+    seen: dict[tuple, tuple] = {}
     uniq = []
     for f in feats:
         pr = f["properties"]
         k = (pr.get("time_series_id"), pr.get("time"))
+        sig = (pr.get("value"), pr.get("approval_status"), json.dumps(pr.get("qualifier")), pr.get("unit_of_measure"))
         if k in seen:
-            if seen[k] != json.dumps(pr, sort_keys=True):
-                raise _err("USGS_DUPLICATE_TIME", f"chunk-boundary instant {k} differs between chunks")
+            if seen[k] != sig:
+                raise _err("USGS_CHUNK_CONFLICT", f"chunk-boundary instant {k} differs between chunks "
+                           f"(value/approval/qualifier): {seen[k]} vs {sig}")
             continue
-        seen[k] = json.dumps(pr, sort_keys=True)
+        seen[k] = sig
         uniq.append(f)
-    return _build(uniq, sid, parameter_code, "00011", time_series_id, rec, continuous=True)
+    return _build(uniq, sid, parameter_code, "00011", time_series_id, rec, continuous=True,
+                  window=(t0, t1))
 
 
 # ---------------------------------------------------------------- locations
+class LocationResult(list):
+    """list[MonitoringLocation] that also carries the request provenance (``upstream``), so an
+    empty bbox/name result is an explicit, attributable "the server returned 0 features"."""
+
+    upstream: dict = {}
+
+
 def _loc(f: dict) -> MonitoringLocation:
-    p = f.get("properties", {}); lon, lat = f["geometry"]["coordinates"][:2]
+    p = f.get("properties") or {}
+    g = f.get("geometry")
+    try:
+        lon, lat = g["coordinates"][:2]
+        lon, lat = float(lon), float(lat)
+    except (TypeError, KeyError, ValueError, IndexError):
+        raise _err("USGS_BAD_BODY", f"monitoring location {p.get('id')!r} has no usable point geometry") from None
     da = p.get("drainage_area")
+    try:
+        da = None if da is None else float(da)
+    except (TypeError, ValueError):
+        raise _err("USGS_BAD_BODY", f"drainage_area {da!r} of {p.get('id')!r} is not numeric") from None
     return MonitoringLocation(
-        site_id=p.get("id"), name=p.get("monitoring_location_name"), lon=float(lon), lat=float(lat),
+        site_id=p.get("id"), name=p.get("monitoring_location_name"), lon=lon, lat=lat,
         site_type_code=p.get("site_type_code"), state_code=p.get("state_code"),
         hydrologic_unit_code=p.get("hydrologic_unit_code"),
         horizontal_datum=p.get("original_horizontal_datum"),
         geometry_crs_note="geometry [lon, lat]; the API does not state its CRS/datum "
                           "(original_horizontal_datum is the source datum)",
-        drainage_area_raw=float(da) if da is not None else None, drainage_area_units=_DRAINAGE_UNITS,
+        drainage_area_raw=da, drainage_area_units=_DRAINAGE_UNITS,
         altitude=p.get("altitude"), vertical_datum=p.get("vertical_datum"), raw=p)
 
 
 def get_monitoring_locations(*, ids: Optional[Sequence[str]] = None, bbox: Optional[Sequence[float]] = None,
                              name_contains: Optional[str] = None, name: Optional[str] = None,
-                             site_type_code: Optional[str] = "ST", limit: int = 500) -> list[MonitoringLocation]:
+                             site_type_code: Optional[str] = "ST", limit: int = 500) -> LocationResult:
     """Monitoring locations by id, bbox or exact name.
 
     ``name_contains`` is NOT supported: only an exact-match ``monitoring_location_name``
     query was recorded; partial matching is unverified, so it is refused rather than guessed.
+
+    An id lookup that finds nothing raises ``USGS_SITE_NOT_FOUND``. A bbox/name search that
+    matches nothing returns an empty ``LocationResult`` whose ``upstream`` shows the request,
+    never a bare ``[]``.
     """
     if name_contains is not None:
         raise _err("USGS_UNSUPPORTED", "partial name search is unverified; use name=<exact name>")
-    rec = _new_record(); out: list[MonitoringLocation] = []
+    rec = _new_record(); out = LocationResult(); out.upstream = rec
     if ids:
         for i in ids:
             p = {"id": _site_id(i), "f": "json"}
-            out += [_loc(f) for f in _paged_features(f"{BASE}/collections/monitoring-locations/items", p, rec)]
+            got = [_loc(f) for f in _paged_features(f"{BASE}/collections/monitoring-locations/items", p, rec)]
+            if not got:
+                raise _err("USGS_SITE_NOT_FOUND", f"{p['id']} is not a monitoring location in the Water Data API",
+                           "check the site number", site_id=p["id"])
+            out.extend(got)
         return out
     p: dict[str, Any] = {}
     if bbox is not None:
@@ -437,7 +575,8 @@ def get_monitoring_locations(*, ids: Optional[Sequence[str]] = None, bbox: Optio
     if not p:
         raise _err("USGS_UNSUPPORTED", "give ids, bbox or name")
     p.update({"limit": int(limit), "f": "json"})
-    return [_loc(f) for f in _paged_features(f"{BASE}/collections/monitoring-locations/items", p, rec)]
+    out.extend(_loc(f) for f in _paged_features(f"{BASE}/collections/monitoring-locations/items", p, rec))
+    return out
 
 
 # ---------------------------------------------------------------- gauge resolution
