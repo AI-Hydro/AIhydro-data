@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed - the queued-backend redirect is an MCP error (Wave U, U4)
+
+- `data_fetch` for a variable that routes to a queued backend used to return
+  `{"error": False, "redirect": True, ...}`, which clients read as success. It now raises
+  `fastmcp.exceptions.ToolError` whose text is the JSON envelope (`error: true`,
+  `code: USE_ASYNC_TOOL`, `next_tools: ["data_fetch_background", ...]`). The `redirect` key is
+  removed. Without fastmcp installed the envelope is returned as a dict.
+
 ### Fixed - provider fill values are never served as data (D4)
 
 - `CHIRPS_IRI` averaged raw OPeNDAP cell values, so a ~1e33 fill value became
