@@ -676,3 +676,47 @@ def test_legacy_index_matches_the_legacy_bytes():
         raw = _read(LEGACY / e["file"])
         assert hashlib.sha256(raw).hexdigest() == e["body_sha256"], e["name"]
         assert "api_key" not in e["url"].lower()
+
+
+# ---- ASCII-only digits, missing time, other transport exceptions
+@pytest.mark.parametrize("v", ["\u0661\u0662\u0663", "\uff11\uff12", "1\u0662", "\u0663.5"])
+def test_unicode_digits_are_not_numbers(monkeypatch, v):
+    with pytest.raises(TerminalSourceError) as ei:
+        _one(monkeypatch, v=v)
+    assert ei.value.code == "USGS_VALUE_UNPARSEABLE"
+
+
+def test_unicode_digits_in_sites_dates_and_zones_are_refused(monkeypatch):
+    with pytest.raises(SourceUnavailable) as ei:
+        uw._site_id("\u0660\u0661\u0660\u0661\u0663\u0665\u0660\u0660")
+    assert ei.value.code == "USGS_SITE_INVALID"
+    with pytest.raises(SourceUnavailable) as e2:
+        uw._norm_instant("\uff12\uff10\uff12\uff16-01-01")
+    assert e2.value.code == "USGS_BAD_WINDOW"
+    with pytest.raises(SourceUnavailable) as e3:
+        uw.get_daily("01013500", "\uff12\uff10\uff12\uff16-01-01", "2026-01-02")
+    assert e3.value.code == "USGS_BAD_WINDOW"
+    assert uw._has_zone("2026-01-01T00:00:00+\u0660\u0660:\u0660\u0660") is False
+
+
+@pytest.mark.parametrize("t", [None, "", 5, ["2020-01-01"]])
+def test_missing_time_is_a_coded_refusal(monkeypatch, t):
+    f = _feat("2020-01-01"); f["properties"]["time"] = t
+    monkeypatch.setattr(uw, "_http_get", Replay(lambda u, p: ok({"features": [f], "links": []})))
+    with pytest.raises(TerminalSourceError) as ei:
+        uw.get_daily("01013500", "2020-01-01", "2020-01-01")
+    assert ei.value.code == "USGS_TIME_MISSING"
+    f2 = {"type": "Feature"}
+    monkeypatch.setattr(uw, "_http_get", Replay(lambda u, p: ok({"features": [f2], "links": []})))
+    with pytest.raises(SourceUnavailable) as ei:
+        uw.get_daily("01013500", "2020-01-01", "2020-01-01")
+    assert ei.value.code == "USGS_BAD_BODY"
+
+
+@pytest.mark.parametrize("exc", [requests.exceptions.ChunkedEncodingError("x"), requests.exceptions.ContentDecodingError("x"),
+                                 requests.exceptions.TooManyRedirects("x")])
+def test_other_requests_exceptions_are_transient_and_coded(wire, exc):
+    wire(lambda r: exc)
+    with pytest.raises(SourceUnavailable) as ei:
+        uw._request(WD_URL, {"f": "json"}, uw._new_record())
+    assert ei.value.code == "USGS_TRANSPORT_ERROR" and not isinstance(ei.value, TerminalSourceError)
