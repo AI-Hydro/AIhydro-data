@@ -37,11 +37,13 @@ pip install aihydro-data[hyriver]
 
 ## USGS NWIS (direct_api)
 
-Anonymous — no credentials needed.
+Anonymous use works but USGS rate-limits it (HTTP 429, error `USGS_RATE_LIMITED`).
+Register a free api.data.gov key and export it as `API_USGS_PAT`; it is sent only as
+the `X-Api-Key` header and is never logged or recorded in provenance.
 
-```bash
-pip install aihydro-data[hyriver]   # dataretrieval ships with hyriver
-```
+No extra install: the USGS Water Data OGC API needs only `requests` and `pandas`.
+(`pip install aihydro-data[legacy-usgs]` + `AIHYDRO_USGS_BACKEND=legacy_waterservices`
+is a temporary switch for the old waterservices path, removed on 2027-01-08.)
 
 ## CHIRPS IRI OPeNDAP (auth-free fallback)
 

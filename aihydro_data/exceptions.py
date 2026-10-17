@@ -54,6 +54,14 @@ class SourceUnavailable(AihydroDataError):
     points at a fallback product."""
 
 
+class TerminalSourceError(SourceUnavailable):
+    """An identity or integrity refusal that must NOT be answered by another
+    product. The fetch() fallback chain re-raises it instead of walking on, so
+    "I looked and this gauge/series cannot be established" never degrades into
+    a modelled-flow series (Wave U, D2). Transport and HTTP failures stay plain
+    SourceUnavailable: they mean "I could not look"."""
+
+
 class RegionUnsupported(AihydroDataError):
     """No product in the registry covers the requested (variable, region)
     combination. Recovery typically suggests `data_list_products()` to

@@ -233,6 +233,18 @@ class FetchResult(BaseModel):
     days_missing_tail: int = 0
     coverage_tolerance_days: int = 1
 
+    # Observation provenance (Wave U). Empty for products that carry none.
+    #   site_resolution  how a gauge was identified (ADR-003 A2 record: method,
+    #                    thresholds, rule_version, candidates, area check)
+    #   quality          per-value quality summary (approval/qualifier counts,
+    #                    provisional_fraction); the per-value columns stay in `data`
+    #   upstream         request URLs (never a key), response sha256s, retrieval
+    #                    time, Last-Modified/ETag when the server sent them, and
+    #                    `data_sha256` of the cached data file once persisted
+    site_resolution: dict[str, Any] = Field(default_factory=dict)
+    quality: dict[str, Any] = Field(default_factory=dict)
+    upstream: dict[str, Any] = Field(default_factory=dict)
+
     # Agent-facing affordances
     next_steps: list[dict[str, str]] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)

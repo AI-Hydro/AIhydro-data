@@ -2,20 +2,23 @@
 Direct-API backend.
 
 Wraps REST APIs that don't go through GEE or HyRiver's OPeNDAP stack:
-  - USGS NWIS daily values  (via `dataretrieval` — part of the HyRiver stack)
+  - USGS NWIS daily values  (USGS Water Data OGC API via sources/usgs_waterdata.py;
+                             the legacy waterservices path is the D3 switch only)
   - CHIRPS_IRI precipitation (via IRI Data Library OPeNDAP — auth-free)
   - Open-Meteo temperature + PET (no auth, global, 1940-present, centroid-based)
   - GRDC monthly streamflow (Phase 4)
 
 All imports are lazy — this module is safe to import without extras installed.
 
-Install: pip install aihydro-data[hyriver]   (for NWIS/dataretrieval)
+Install: nothing extra for NWIS (requests + pandas are base dependencies)
+         pip install aihydro-data[legacy-usgs]  (D3 switch only, removed 2027-01-08)
          pip install aihydro-data[opendap]   (for CHIRPS_IRI/xarray+netCDF4)
          requests                            (for Open-Meteo — already a core dep)
 """
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Optional
 
 from aihydro_data.contracts import AggregationMode, ProductSpec
@@ -49,6 +52,77 @@ def _gauge_id_from_geometry(geometry: Any) -> str | None:
     return sid.zfill(8) if sid.isdigit() else sid
 
 
+LEGACY_REMOVAL_DATE = "2027-01-08"      # D3: the legacy waterservices switch is deleted on this date
+
+
+def _frame_from_series(ser: Any) -> tuple[Any, dict, dict]:
+    """UsgsSeries -> the served NWIS frame (+ recomputed quality summary, upstream)."""
+    from aihydro_data.sources import usgs_waterdata as uw
+
+    df = ser.frame.copy()
+    n_null = int(df["value_native"].isna().sum())
+    df = df.dropna(subset=["value_native"]).reset_index(drop=True)
+    out = df.rename(columns={"time": "date", "value_m3s": "streamflow"})
+    out["qualifier"] = out["qualifier"].map(lambda q: ",".join(q))
+    out = out[["date", "streamflow", "value_native", "approval_status", "approval_code",
+               "qualifier", "qualifier_code"]]
+    summary = uw.summarize_frame(df, null_dropped=n_null)
+    summary.update({"units_native": ser.units_native, "time_series_id": ser.time_series_id,
+                    "site_id": ser.site_id, "backend": "usgs_waterdata"})
+    return out, summary, dict(ser.upstream)
+
+
+def _legacy_waterservices_daily(site: str, start: str, end: str, param_cd: str, stat_cd: str):
+    """D3 switch (AIHYDRO_USGS_BACKEND=legacy_waterservices): legacy dataretrieval.nwis path.
+    Exists only until LEGACY_REMOVAL_DATE; needs ``pip install aihydro-data[legacy-usgs]``."""
+    import datetime as _dt
+    import pandas as pd
+    from aihydro_data.exceptions import SourceUnavailable
+    from aihydro_data.sources import usgs_waterdata as uw
+
+    require_import("dataretrieval", extra="legacy-usgs", backend="usgs_legacy_waterservices")
+    import dataretrieval.nwis as nwis       # noqa: WPS433  (D3 branch; the only permitted reference)
+
+    bare = site[5:] if site.startswith("USGS-") else site
+    df, _meta = nwis.get_dv(sites=bare, parameterCd=param_cd, statCd=stat_cd, start=start, end=end)
+    if df is None or df.empty:
+        raise uw._err("USGS_NO_DATA", f"legacy waterservices returned no rows for {site}", site_id=site)
+    df = df.reset_index()
+    qcols = [c for c in df.columns if param_cd in str(c) and not str(c).endswith("_cd")]
+    if len(qcols) != 1:
+        raise uw._err("USGS_MULTIPLE_SERIES", f"legacy columns ambiguous: {qcols}", site_id=site)
+    qc = qcols[0]
+    cdcol = f"{qc}_cd"
+    date_col = "datetime" if "datetime" in df.columns else df.columns[0]
+    dates = pd.to_datetime(df[date_col], utc=True).dt.tz_localize(None)
+    codes = df[cdcol].fillna("").astype(str) if cdcol in df.columns else pd.Series([""] * len(df))
+    tokens = [set(c.split()) for c in codes]
+    bad = sorted({t for ts in tokens for t in ts} - {"A", "P", "e"})
+    if bad or any(not ({"A", "P"} & ts) for ts in tokens):
+        raise uw._err("USGS_APPROVAL_UNKNOWN", f"legacy qualifier codes not understood: {bad or 'missing A/P'}")
+    val = pd.to_numeric(df[qc], errors="coerce")
+    out = pd.DataFrame({
+        "date": dates, "streamflow": val * uw.CFS_TO_M3S, "value_native": val,
+        "approval_status": ["Approved" if "A" in ts else "Provisional" for ts in tokens],
+        "approval_code": ["A" if "A" in ts else "P" for ts in tokens],
+        "qualifier": ["ESTIMATED" if "e" in ts else "" for ts in tokens],
+        "qualifier_code": ["e" if "e" in ts else "" for ts in tokens],
+    })
+    n_null = int(out["value_native"].isna().sum())
+    out = out.dropna(subset=["value_native"]).reset_index(drop=True)
+    summary = uw.summarize_frame(out.rename(columns={"date": "time", "streamflow": "value_m3s"})
+                                 .assign(qualifier=lambda d: d["qualifier"].map(lambda q: tuple(t for t in q.split(",") if t))),
+                                 null_dropped=n_null)
+    summary.update({"units_native": "ft^3/s", "site_id": site, "backend": "legacy_waterservices"})
+    upstream = {"backend": "legacy_waterservices", "api_version": "waterservices/nwis/dv",
+                "retrieved_at": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "request_urls": [], "response_sha256": [], "last_modified": [], "etag": [], "n_pages": 1,
+                "removal_date": LEGACY_REMOVAL_DATE,
+                "note": "legacy waterservices path: decommissioned 2027-02-22; this switch is deleted "
+                        f"{LEGACY_REMOVAL_DATE}; response bytes were not captured"}
+    return out, summary, upstream
+
+
 class Backend(SourceBackend):
     """Direct-API backend (NWIS, GRDC, …)."""
 
@@ -59,11 +133,11 @@ class Backend(SourceBackend):
             "variables": ["streamflow", "precipitation", "tmax", "tmin", "pet"],
             "coverage": ["CONUS", "global"],
             "requires_auth": [],
-            "requires_extras": ["hyriver", "opendap"],
+            "requires_extras": ["opendap"],
         }
 
     def is_available(self) -> tuple[bool, Optional[str]]:
-        # The direct_api backend hosts NWIS (needs dataretrieval), CHIRPS_IRI
+        # The direct_api backend hosts NWIS (needs only requests), CHIRPS_IRI
         # (needs xarray + netCDF4), and Open-Meteo (needs only requests — always
         # available).  We report available=True if ANY dep is present; each
         # fetch method does its own finer-grained check.
@@ -72,7 +146,7 @@ class Backend(SourceBackend):
             return True, None
         except ImportError:
             pass
-        for pkg in ("dataretrieval", "xarray"):
+        for pkg in ("xarray",):
             try:
                 __import__(pkg)
                 return True, None
@@ -80,7 +154,7 @@ class Backend(SourceBackend):
                 continue
         return False, (
             "direct_api backend has no usable dependencies installed. "
-            "For NWIS streamflow: `pip install aihydro-data[hyriver]`. "
+            "NWIS streamflow needs only `requests` (a base dependency). "
             "For CHIRPS_IRI precipitation: `pip install aihydro-data[opendap]`."
         )
 
@@ -91,13 +165,17 @@ class Backend(SourceBackend):
         start: str,
         end: str,
         aggregation: AggregationMode,
+        outlet: Any = None,
     ) -> Any:
-        """Return a pd.DataFrame with date + variable columns."""
+        """Return a pd.DataFrame with date + variable columns.
+
+        ``outlet`` is (lat, lon) as everywhere in fetch(); only NWIS uses it
+        (gauge resolution under ADR-003 A2)."""
         cfg = spec.backend_config
         service = cfg.get("service", "nwis_dv")
 
         if service == "nwis_dv":
-            return self._fetch_nwis_dv(spec, cfg, geometry, start, end)
+            return self._fetch_nwis_dv(spec, cfg, geometry, start, end, outlet=outlet)
 
         if service == "chirps_iri":
             return self._fetch_chirps_iri(spec, cfg, geometry, start, end)
@@ -128,120 +206,49 @@ class Backend(SourceBackend):
         geometry: Any,
         start: str,
         end: str,
+        outlet: Any = None,
     ) -> Any:
-        self._assert_available()
+        """USGS daily discharge via the Water Data OGC API.
 
-        # Resolve gauge ID
-        site_no = _gauge_id_from_geometry(geometry)
-        if site_no is None:
-            # Try centroid-based NLDI nearest-gauge lookup (best-effort)
-            site_no = self._nearest_nwis_gauge(geometry)
-        if not site_no:
-            from aihydro_data.exceptions import GeometryInvalid
-            raise GeometryInvalid(
-                code="NWIS_NO_GAUGE_ID",
-                message=(
-                    "NWIS fetch requires a USGS gauge ID. "
-                    "Pass the gauge ID as the geometry string (e.g. geometry='03245500'), "
-                    "or pass a watershed GeoDataFrame to use the nearest-gauge lookup."
-                ),
-                recovery="Pass geometry='USGS_SITE_NUMBER' or a watershed GeoDataFrame.",
-                next_tools=["data_help"],
-                docs_anchor="streamflow#nwis",
-            )
-
-        import dataretrieval.nwis as nwis
+        The gauge is resolved by ADR-003 amendment A2 (``usgs_waterdata.resolve_gauge``): an
+        explicit id, else an outlet checked by drainage-area agreement. There is no centroid
+        walk and no ``sites[0]``. Identity refusals are ``TerminalSourceError`` and are never
+        answered by a modelled product. The served frame keeps USGS's per-value approval and
+        qualifier; the resolution, quality summary and upstream provenance ride on
+        ``data.attrs`` into FetchResult / ManifestEntry.
+        """
         import pandas as pd
+        from aihydro_data.sources import usgs_waterdata as uw
 
         param_cd = cfg.get("parameter_code", "00060")
         stat_cd = cfg.get("stat_code", "00003")
 
-        df, meta = nwis.get_dv(
-            sites=site_no,
-            parameterCd=param_cd,
-            statCd=stat_cd,
-            start=start,
-            end=end,
-        )
+        site_no = _gauge_id_from_geometry(geometry)
+        if site_no is not None:
+            res = uw.resolve_gauge(gauge_id=site_no)
+        else:
+            lonlat = None
+            if outlet is not None:                       # fetch() convention: (lat, lon)
+                lonlat = (float(outlet[1]), float(outlet[0]))
+            elif getattr(geometry, "geom_type", None) == "Point":
+                lonlat = (float(geometry.x), float(geometry.y))
+            res = uw.resolve_gauge(geometry, outlet=lonlat)
+        log.info("NWIS gauge %s resolved by %s (rule %s).", res.site, res.method, res.rule_version)
 
-        if df is None or df.empty:
-            return pd.DataFrame(columns=["date", "streamflow"])
-
-        # dataretrieval returns a DatetimeIndex with column like '00060_Mean' or 'X_00060_00003'
-        df = df.reset_index()
-        # Find the discharge column
-        q_cols = [c for c in df.columns if "00060" in str(c) and "cd" not in str(c).lower()]
-        if not q_cols:
-            # fallback: first numeric column
-            q_cols = df.select_dtypes("number").columns.tolist()
-
-        date_col = "datetime" if "datetime" in df.columns else df.columns[0]
-        df = df[[date_col, q_cols[0]]].copy()
-        df.columns = ["date", "streamflow"]
-        df["date"] = pd.to_datetime(df["date"])
-        df["streamflow"] = pd.to_numeric(df["streamflow"], errors="coerce")
-
-        # Convert cfs → m³/s
-        df["streamflow"] = df["streamflow"] * 0.028316847
-
-        return df.dropna(subset=["streamflow"]).reset_index(drop=True)
-
-    _NLDI_BASE = "https://api.water.usgs.gov/nldi/linked-data"
-
-    def _nearest_nwis_gauge(self, geometry: Any, distance_km: int = 25) -> str | None:
-        """
-        Use NLDI to find an NWIS streamflow gauge near a geometry centroid.
-
-        Two-step lookup (the NLDI API has no direct lat/lon→gauge route):
-          1. ``/comid/position?coords=POINT(lon lat)`` → the NHDPlus comid of
-             the flowline at/near the point.
-          2. ``/comid/{comid}/navigation/UM/nwissite?distance=<km>`` → NWIS
-             sites walking the upstream main stem; falls back to ``DM``
-             (downstream main) when no upstream site exists.
-
-        Returns the bare site number (``USGS-`` prefix stripped) or None.
-        """
-        try:
-            import requests
-            c = geometry.centroid
-            lon, lat = c.x, c.y
-
-            resp = requests.get(
-                f"{self._NLDI_BASE}/comid/position",
-                params={"coords": f"POINT({lon:.6f} {lat:.6f})"},
-                timeout=15,
-            )
-            if resp.status_code != 200:
-                log.debug("NLDI position lookup HTTP %s.", resp.status_code)
-                return None
-            features = resp.json().get("features", [])
-            if not features:
-                return None
-            comid = features[0].get("properties", {}).get("comid")
-            if not comid:
-                return None
-
-            for mode in ("UM", "DM"):
-                resp = requests.get(
-                    f"{self._NLDI_BASE}/comid/{comid}/navigation/{mode}/nwissite",
-                    params={"distance": distance_km},
-                    timeout=15,
-                )
-                if resp.status_code != 200:
-                    continue
-                sites = resp.json().get("features", [])
-                if sites:
-                    ident = sites[0].get("properties", {}).get("identifier", "")
-                    site_no = str(ident).replace("USGS-", "").replace("USGS:", "").strip()
-                    if site_no:
-                        log.info(
-                            "NLDI nearest gauge: comid=%s → %s (navigation=%s).",
-                            comid, site_no, mode,
-                        )
-                        return site_no
-        except Exception as exc:
-            log.debug("NLDI nearest-gauge lookup failed: %s", exc)
-        return None
+        if os.environ.get("AIHYDRO_USGS_BACKEND", "").strip().lower() == "legacy_waterservices":
+            frame, summary, upstream = _legacy_waterservices_daily(res.site, start, end, param_cd, stat_cd)
+        else:
+            ser = uw.get_daily(res.site, start, end, param_cd, stat_cd)
+            frame, summary, upstream = _frame_from_series(ser)
+        frame.attrs.update({
+            "aihydro_units": "m3/s",
+            "aihydro_site_resolution": res.to_dict(),
+            "aihydro_quality": summary,
+            "aihydro_upstream": upstream,
+        })
+        if res.warnings:
+            frame.attrs["aihydro_notes"] = list(res.warnings)
+        return frame
 
     # ── CHIRPS via IRI OPeNDAP ────────────────────────────────────────────
 

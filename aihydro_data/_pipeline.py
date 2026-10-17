@@ -14,6 +14,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Optional
 
+from aihydro_data.exceptions import TerminalSourceError
+
 from aihydro_data.contracts import (
     AggregationMode,
     FetchRequest,
@@ -257,11 +259,21 @@ def fetch(
     # batch path so callers don't have to know about fetch_batch() to do
     # multi-geometry fetches.
     if _looks_like_collection(geometry):
+        if outlet is not None:
+            from aihydro_data.exceptions import GeometryInvalid
+            raise GeometryInvalid(
+                code="OUTLET_WITH_COLLECTION",
+                message="outlet= is one point and cannot apply to several geometries; it would be dropped "
+                        "for every item but the one it was meant for.",
+                recovery="Call fetch() once per geometry, each with its own outlet.",
+                next_tools=["data_help"], docs_anchor="batch",
+            )
         batch = fetch_batch(
             variable, geometry, start, end,
             mode=mode, product=product, fallback=fallback,
             aggregation=aggregation, cache=cache,
             index=index, native_resolution=native_resolution, validate=validate,
+            region=region,
         )
         errors: dict[str, Exception] = batch["errors"]
         results = [batch["results"][lbl] for lbl in batch["labels"]
@@ -448,7 +460,11 @@ def fetch(
         # A manual pin can still have fallbacks. A later strict request must
         # not reuse a fallback product written under the same pinned key.
         allowed = [s.id for s in candidate_specs]
-        cached = cache_read(ck, req, allowed_products=allowed)
+        _miss_reasons: list[str] = []
+        cached = cache_read(ck, req, allowed_products=allowed, miss_reasons=_miss_reasons)
+        for _why in _miss_reasons:
+            history.append({"product": variable, "source": "cache",
+                            "outcome": "rejected", "reason": _why})
         if cached is not None:
             accepted = True
             if validate is not None:
@@ -520,6 +536,15 @@ def fetch(
                 except Exception as ce:
                     log.debug("Cache write failed (non-fatal): %s", ce)
             return result
+        except TerminalSourceError as term:
+            # Identity/integrity refusal (e.g. GAUGE_AMBIGUOUS): the question "which
+            # gauge?" has no answer, so no other product may answer it. Never walk on.
+            history.append({
+                "product": spec.id, "source": spec.source,
+                "outcome": "refused", "reason": f"{term.code}: {term.message}",
+            })
+            term.details = {**term.details, "fallback_history": history, "product": spec.id}
+            raise
         except _EmptyResult as empty:
             # Empty-but-successful → reject (not "failed") and keep walking the
             # chain. Recorded distinctly so the decision trail shows it was a
@@ -585,9 +610,13 @@ RESULT_SCHEMA_VERSION = 5
 #   streamflow 1: results used to be labelled with the product-spec unit even
 #                 when the payload declared another spelling or unit; they now
 #                 record the declared unit and `units_spec` (2026-10-03).
+#   streamflow 2: NWIS now comes from the USGS Water Data API with per-value
+#                 approval/qualifier columns, an A2-resolved gauge and recorded
+#                 provenance; entries without those must not be served
+#                 (Wave U, 2026-10-17).
 #   dem 1:        small CONUS requests now route to 3DEP 10 m before GLO-30
 #                 (2026-09-29); old GLO-30 entries for them must not be reused.
-_VARIABLE_CACHE_REVISION: dict[str, int] = {"impervious": 1, "dem": 1, "streamflow": 1}
+_VARIABLE_CACHE_REVISION: dict[str, int] = {"impervious": 1, "dem": 1, "streamflow": 2}
 
 
 def _result_schema_for(variable: str) -> int | str:
@@ -871,6 +900,18 @@ def _fetch_one(
                 f"({_n_masked} masked); nothing usable for {start}..{end}."
             )
 
+    # Observation provenance attached by the backend (NWIS: gauge resolution,
+    # quality summary, upstream). Popped so it is not also embedded in the
+    # parquet metadata; it rides on the result and the manifest instead.
+    _site_res = _quality = _upstream = {}
+    try:
+        _a = data.attrs
+        _site_res = dict(_a.pop("aihydro_site_resolution", {}) or {})
+        _quality = dict(_a.pop("aihydro_quality", {}) or {})
+        _upstream = dict(_a.pop("aihydro_upstream", {}) or {})
+    except Exception:
+        pass
+
     # Harvest backend-attached caveats (e.g. "polygon mask failed") so
     # degradations surface on the result instead of dying in debug logs.
     notes: list[str] = []
@@ -933,6 +974,9 @@ def _fetch_one(
         aggregation_actual=agg_actual,
         next_steps=list(spec.next_steps),
         notes=notes,
+        site_resolution=_site_res,
+        quality=_quality,
+        upstream=_upstream,
     )
 
 
@@ -954,6 +998,7 @@ def fetch_batch(
     index: Optional[str] = None,
     native_resolution: bool = False,
     validate: Optional[Callable[[FetchResult], bool]] = None,
+    region: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Fetch one variable for multiple geometries in parallel.
@@ -984,6 +1029,11 @@ def fetch_batch(
     index, native_resolution, validate
         Forwarded verbatim to each per-geometry fetch() call (spectral index
         name, native-resolution raster export, quality-gate callback).
+    region
+        Routing-region override, forwarded to every per-geometry fetch(). (It
+        used to be silently dropped on the batch path.) ``outlet`` is a single
+        point and is deliberately not accepted here; fetch() refuses it for
+        collections.
 
     Returns
     -------
@@ -1027,6 +1077,7 @@ def fetch_batch(
             index=index,
             native_resolution=native_resolution,
             validate=validate,
+            region=region,
         )
         return label, result
 

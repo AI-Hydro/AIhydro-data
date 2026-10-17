@@ -55,12 +55,49 @@ def cache_dir() -> Path:
     return d
 
 
+# ── Integrity helpers ─────────────────────────────────────────────────────
+
+PROVISIONAL_TTL_ENV = "AIHYDRO_DATA_PROVISIONAL_TTL_DAYS"
+PROVISIONAL_TTL_DEFAULT_DAYS = 7.0
+
+
+def provisional_ttl_days() -> float:
+    """TTL for cache entries that hold provisional values (human-tunable via env)."""
+    import os
+    raw = os.environ.get(PROVISIONAL_TTL_ENV, "").strip()
+    try:
+        v = float(raw) if raw else PROVISIONAL_TTL_DEFAULT_DAYS
+        return v if v >= 0 else PROVISIONAL_TTL_DEFAULT_DAYS
+    except ValueError:
+        return PROVISIONAL_TTL_DEFAULT_DAYS
+
+
+def file_sha256(path: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _age_days(iso: str) -> Optional[float]:
+    try:
+        t = datetime.fromisoformat(iso)
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - t).total_seconds() / 86400.0
+    except Exception:
+        return None
+
+
 # ── Read ──────────────────────────────────────────────────────────────────
 
 def cache_read(
     ck: str,
     req: Optional["FetchRequest"] = None,
     allowed_products: Optional[list[str]] = None,
+    miss_reasons: Optional[list[str]] = None,
 ) -> Optional["FetchResult"]:
     """
     Return a cached FetchResult if one exists for `ck`, else None.
@@ -74,6 +111,13 @@ def cache_read(
     the current routing policy would never select (policy change, different
     detected region). Pass the current candidate chain's product ids; pass
     None to disable the check (manual pins, which already key on product).
+
+    Integrity (Wave U): when the manifest carries ``data_sha256`` the data file
+    is re-hashed and a mismatch is a miss. An entry whose ``quality`` records
+    provisional values expires after ``AIHYDRO_DATA_PROVISIONAL_TTL_DAYS``
+    (default 7); fully approved entries never expire. The reason for such a
+    miss is appended to ``miss_reasons`` (if given) so the caller can record it
+    in ``fallback_history``.
     """
     from aihydro_data.cache.manifest import latest_manifest
 
@@ -96,6 +140,24 @@ def cache_read(
             ck, manifest.product, allowed_products,
         )
         return None
+
+    data_path = parquet_path if parquet_path.exists() else nc_path
+    if getattr(manifest, "data_sha256", None):
+        actual = file_sha256(data_path)
+        if actual != manifest.data_sha256:
+            log.warning("Cache entry %s fails its sha256 check — treating as miss.", ck)
+            if miss_reasons is not None:
+                miss_reasons.append("cached data file sha256 mismatch")
+            return None
+    prov = float((getattr(manifest, "quality", None) or {}).get("provisional_fraction") or 0.0)
+    if prov > 0:
+        ttl = provisional_ttl_days()
+        age = _age_days(manifest.fetched_at)
+        if age is None or age > ttl:
+            log.info("Cache entry %s holds provisional data older than %s d — treating as miss.", ck, ttl)
+            if miss_reasons is not None:
+                miss_reasons.append("provisional entry expired")
+            return None
 
     try:
         if parquet_path.exists():
@@ -185,6 +247,10 @@ def cache_read(
         bibtex=manifest.bibtex,
         spatial_support=getattr(manifest, "spatial_support", "areal"),
         aggregation_actual=getattr(manifest, "aggregation_actual", ""),
+        site_resolution=dict(getattr(manifest, "site_resolution", {}) or {}),
+        quality=dict(getattr(manifest, "quality", {}) or {}),
+        upstream={**(getattr(manifest, "upstream", {}) or {}),
+                  **({"data_sha256": manifest.data_sha256} if getattr(manifest, "data_sha256", None) else {})},
         next_steps=[],
         notes=list(manifest.notes) + [f"Served from disk cache (fetched {manifest.fetched_at[:10]})."],
     )
@@ -270,6 +336,11 @@ def cache_write(result: "FetchResult", geom_wkt: str = "", geom_id: str = "") ->
         log.warning("Cache write failed for %s: %s", ck, exc)
         return
 
+    sha = None
+    try:
+        sha = file_sha256(Path(data_file))
+    except Exception as exc:      # best-effort: no hash -> read-side check is skipped
+        log.debug("could not hash %s: %s", data_file, exc)
     entry = ManifestEntry(
         cache_key=ck,
         variable=result.variable,
@@ -290,6 +361,10 @@ def cache_write(result: "FetchResult", geom_wkt: str = "", geom_id: str = "") ->
         notes=list(result.notes),
         spatial_support=getattr(result, "spatial_support", "areal"),
         aggregation_actual=getattr(result, "aggregation_actual", ""),
+        site_resolution=dict(getattr(result, "site_resolution", {}) or {}),
+        quality=dict(getattr(result, "quality", {}) or {}),
+        upstream=dict(getattr(result, "upstream", {}) or {}),
+        data_sha256=sha,
     )
     try:
         write_manifest(d, entry)
