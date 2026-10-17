@@ -64,9 +64,11 @@ def _frame_from_series(ser: Any) -> tuple[Any, dict, dict]:
     df = df.dropna(subset=["value_native"]).reset_index(drop=True)
     out = df.rename(columns={"time": "date", "value_m3s": "streamflow"})
     out["qualifier"] = out["qualifier"].map(lambda q: ",".join(q))
-    out = out[["date", "streamflow", "value_native", "approval_status", "approval_code",
+    out = out[["date", "streamflow", "value_native", "negative_flag", "approval_status", "approval_code",
                "qualifier", "qualifier_code"]]
     summary = uw.summarize_frame(df, null_dropped=n_null)
+    summary.update({k: v for k, v in ser.quality_summary.items()
+                    if k in ("n_expected", "n_missing", "median_step_s", "max_gap_s", "n_gaps_gt_2x_median")})
     summary.update({"units_native": ser.units_native, "time_series_id": ser.time_series_id,
                     "site_id": ser.site_id, "backend": "usgs_waterdata"})
     return out, summary, dict(ser.upstream)
@@ -103,6 +105,7 @@ def _legacy_waterservices_daily(site: str, start: str, end: str, param_cd: str, 
     val = pd.to_numeric(df[qc], errors="coerce")
     out = pd.DataFrame({
         "date": dates, "streamflow": val * uw.CFS_TO_M3S, "value_native": val,
+        "negative_flag": (val < 0).fillna(False),
         "approval_status": ["Approved" if "A" in ts else "Provisional" for ts in tokens],
         "approval_code": ["A" if "A" in ts else "P" for ts in tokens],
         "qualifier": ["ESTIMATED" if "e" in ts else "" for ts in tokens],
