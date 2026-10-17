@@ -40,6 +40,13 @@ result = fetch(..., mode="manual", product="CHIRPS", fallback=None)
 # raises SourceUnavailable if CHIRPS fails — no fallback attempted
 ```
 
+## Refusals are terminal
+
+An identity or integrity refusal (`GAUGE_REQUIRED`, `GAUGE_NOT_FOUND`, `GAUGE_AMBIGUOUS`, and the
+`USGS_*` data refusals) raises `TerminalSourceError` and is **never** answered by walking on to a
+modelled product: `fallback_history` ends with `outcome="refused"`. Transport failures (timeouts,
+5xx) are different — they mean "could not look" and the chain may continue.
+
 ## Reading the error when all backends fail
 
 ```python

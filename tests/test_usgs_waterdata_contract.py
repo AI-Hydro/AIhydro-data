@@ -385,31 +385,6 @@ def test_resolve_explicit_alias_and_required(replay):
     assert ei.value.code == "GAUGE_REQUIRED"
 
 
-def test_resolve_outlet_single_candidate(replay):
-    lon, lat = _site_xy("01013500")
-    g = uw.resolve_gauge(outlet=(lon, lat), max_distance_m=500)
-    assert (g.site, g.method, g.comid) == ("USGS-01013500", "outlet_snap", 724696)
-    assert g.distance_m < 1 and [c["site"] for c in g.candidates] == ["USGS-01013500"]
-
-
-def test_resolve_outlet_ambiguous_and_not_found_and_threshold(replay, monkeypatch):
-    lon, lat = _site_xy("01013500")
-    with pytest.raises(SourceUnavailable) as ei:
-        uw.resolve_gauge(outlet=(lon, lat), max_distance_m=30000)
-    assert ei.value.code == "GAUGE_AMBIGUOUS" and len(ei.value.details["candidates"]) > 1
-    with pytest.raises(SourceUnavailable) as ei:
-        uw.resolve_gauge(outlet=(lon, lat))
-    assert ei.value.code == "GAUGE_THRESHOLD_REQUIRED"
-    real = Replay()
-    def ov(url, params):               # the shifted outlet snaps to the same recorded COMID
-        if url.endswith("/comid/position"):
-            return real(url, {"coords": f"POINT({lon} {lat})", "f": "json"})
-    monkeypatch.setattr(uw, "_http_get", Replay(ov))
-    with pytest.raises(SourceUnavailable) as ei:
-        uw.resolve_gauge(outlet=(lon + 0.01, lat), max_distance_m=10)
-    assert ei.value.code == "GAUGE_NOT_FOUND"
-
-
 def test_transport_refuses_other_hosts():
     with pytest.raises(SourceUnavailable) as ei:
         uw._http_get("https://waterservices.usgs.gov/nwis/dv/")

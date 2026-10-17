@@ -58,7 +58,7 @@ Before `aihydro-data`, fetching hydrology data meant hard-coding a single CONUS-
 | Land cover | NLCD | ESA WorldCover | Dynamic World |
 | Soil properties | POLARIS | SoilGrids | — |
 | DEM | 3DEP (10 m) | Copernicus GLO-30 | SRTM, MERIT-DEM |
-| Streamflow | USGS NWIS | GEOGLOWS, Open-Meteo, GloFAS | GEOGLOWS, Open-Meteo |
+| Streamflow | USGS Water Data API (NWIS) | GEOGLOWS, Open-Meteo, GloFAS | GEOGLOWS, Open-Meteo |
 | NDVI | MODIS (250 m) | MODIS (250 m) | Sentinel-2 (10 m) |
 | LAI | MODIS | MODIS | — |
 

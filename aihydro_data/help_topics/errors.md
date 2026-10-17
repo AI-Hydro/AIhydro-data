@@ -27,6 +27,12 @@ All errors return a structured envelope:
 | `GEOMETRY_INVALID`     | Could not parse / coerce the geometry           | Use `(lat, lon)` tuple or valid GeoJSON dict                 |
 | `MISSING_EXTRAS`       | Required package not installed                  | `pip install aihydro-data[<extra>]`                          |
 | `FETCH_TOO_LARGE`      | Estimated request volume too large              | Use `aggregation="basin_mean"` or split time range           |
+| `GAUGE_REQUIRED`       | Gauge not identifiable (polygon without outlet, or outlet off the network with no polygon) | Pass a USGS site number, a polygon plus `outlet=(lat, lon)`, or ask for a modelled product explicitly |
+| `GAUGE_NOT_FOUND`      | No discharge gauge passes the A2 gates (5 km along the river, 10 % drainage area) | Pass the gauge id explicitly; `details.reason` and `details.candidates` say why |
+| `GAUGE_AMBIGUOUS`      | More than one admissible (or unverifiable) gauge, or an id/alias conflict | Pass the gauge id explicitly; there is no "nearest wins" |
+| `USGS_RATE_LIMITED`    | USGS returned HTTP 429 without an API key       | Register an api.data.gov key and export `API_USGS_PAT`       |
+| `USGS_*` refusals (`USGS_NO_DATA`, `USGS_SITE_NOT_FOUND`, `USGS_MULTIPLE_SERIES`, `USGS_APPROVAL_UNKNOWN`, `USGS_UNIT_UNKNOWN`, `USGS_VALUE_UNPARSEABLE`, `USGS_VALUE_SENTINEL`, ...) | The record cannot be served as observed discharge | Read `message`/`details`; these are terminal and never fall back to modelled flow |
+| `USGS_TIMEOUT` / `USGS_UNREACHABLE` / `USGS_SERVER_ERROR` | USGS could not be reached or failed | Transient; retry later (the chain may continue to another product) |
 | `UNEXPECTED_ERROR`     | Unclassified exception in backend               | Report the full error message at github.com/AI-Hydro/aihydro-data/issues |
 
 ## In Python

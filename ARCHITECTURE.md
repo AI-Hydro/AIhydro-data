@@ -205,7 +205,7 @@ Coordinate order note: `pygridmet` expects `(lon, lat)`, not `(lat, lon)`.
 
 Two services:
 
-- **`nwis_dv`** — USGS daily values via `dataretrieval.nwis.get_dv()`. Converts cfs → m³/s. Accepts gauge IDs passed as geometry strings (wrapped in `GaugeID` by `coerce_geometry()`).
+- **`nwis_dv`** — USGS daily discharge from the Water Data OGC API (`sources/usgs_waterdata.py`; `requests` + `pandas` only). Converts ft³/s → m³/s with 0.028316846592 and keeps USGS's per-value approval and qualifier. The gauge is an explicit id (a `GaugeID` geometry) or is resolved from a polygon + outlet under ADR-003 amendment A2 (5 km along the river and drainage-area agreement within 10 %); there is no centroid lookup, and a failed identification is a terminal refusal. The legacy `dataretrieval`/waterservices path survives only behind `AIHYDRO_USGS_BACKEND=legacy_waterservices` (extra `legacy-usgs`) and is deleted on 2027-01-08.
 - **`chirps_iri`** — CHIRPS v2 via IRI Data Library OPeNDAP. No auth. Server-side spatial + temporal subsetting via `xarray.open_dataset(url, engine="netcdf4")`.
 
 ---

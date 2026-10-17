@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed - NWIS streamflow comes from the USGS Water Data API; gauge identity is never guessed (Wave U)
+
+- `NWIS_STREAMFLOW` now reads the Water Data OGC API (`sources/usgs_waterdata.py`) instead of
+  `dataretrieval`/waterservices (which is decommissioned 2027-02-22). The served frame keeps
+  `approval_status`/`approval_code` and `qualifier`/`qualifier_code` per row; `FetchResult` and
+  `ManifestEntry` gain `site_resolution`, `quality` and `upstream` (plus `data_sha256`).
+- The centroid walk (`_nearest_nwis_gauge`: first NLDI site, errors swallowed) is deleted.
+  Gauges are resolved by ADR-003 amendment A2: explicit id, or outlet + drainage-area agreement.
+  `GAUGE_REQUIRED` / `GAUGE_NOT_FOUND` / `GAUGE_AMBIGUOUS` are terminal (`TerminalSourceError`)
+  and never fall through to GEOGLOWS/GloFAS.
+- Cache: streamflow revision 2 (old entries are misses); entries are re-hashed on read; entries with
+  provisional values expire after `AIHYDRO_DATA_PROVISIONAL_TTL_DAYS` (default 7).
+- Extras: `hydrofunctions` dropped; `direct` replaced by `legacy-usgs` (`dataretrieval`), used only by
+  the temporary D3 switch `AIHYDRO_USGS_BACKEND=legacy_waterservices`, deleted 2027-01-08.
+- Fixed: `fetch()` on a collection and `fetch_batch()` silently dropped `region=`; `outlet=` with a
+  collection is now refused (it would apply to one item only).
+
 ### Fixed - provider fill values are never served as data (D4)
 
 - `CHIRPS_IRI` averaged raw OPeNDAP cell values, so a ~1e33 fill value became
