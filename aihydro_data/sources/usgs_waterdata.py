@@ -160,6 +160,28 @@ def features_sha256(features: Sequence[Any]) -> str:
     return hashlib.sha256(_canonical_json(list(features))).hexdigest()
 
 
+def features_sorted_sha256(features: Sequence[Any]) -> str:
+    """Like :func:`features_sha256` but independent of served order (sorted by time, then feature id)."""
+    def key(f: Any) -> tuple:
+        p = f.get("properties") if isinstance(f, dict) else None
+        return (str((p or {}).get("time")), str(f.get("id")) if isinstance(f, dict) else "")
+    return hashlib.sha256(_canonical_json(sorted(features, key=key))).hexdigest()
+
+
+def values_sha256(features: Sequence[Any]) -> str:
+    """Digest of the observed data only: ``[time, value, qualifier, approval_status]`` per feature,
+    sorted by (time, time_series_id). Unlike ``features_sha256`` it ignores ``last_modified`` and ids,
+    so "same data" and "same data, record touched (``last_modified`` bumped)" can be told apart:
+    equal ``values_sha256`` with different ``features_sha256`` means touched but not revised."""
+    rows = []
+    for f in features:
+        p = f.get("properties", {}) if isinstance(f, dict) else {}
+        rows.append([p.get("time"), p.get("value"), p.get("qualifier"), p.get("approval_status"),
+                     p.get("time_series_id")])
+    rows.sort(key=lambda r: (str(r[0]), str(r[4])))
+    return hashlib.sha256(_canonical_json([r[:4] for r in rows])).hexdigest()
+
+
 def _canonical(url: str, params: Optional[Mapping[str, Any]]) -> str:
     return url + ("?" + urlencode(params) if params else "")
 
@@ -351,7 +373,8 @@ def _new_record() -> dict:
             "request_urls": [], "retrieved_at": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "response_sha256": [], "content_sha256": [], "volatile_envelope_keys": list(VOLATILE_ENVELOPE_KEYS),
             "last_modified": [], "etag": [], "date": [],
-            "x_build_version": [], "feature_last_modified_max": None, "features_sha256": None, "n_pages": 0}
+            "x_build_version": [], "feature_last_modified_max": None, "features_sha256": None,
+            "features_sorted_sha256": None, "values_sha256": None, "n_pages": 0}
 
 
 def _paged_features(url: str, params: Mapping[str, Any], record: dict) -> list[dict]:
@@ -512,8 +535,10 @@ def _build(features: list[dict], site_id: str, parameter_code: str, statistic_id
 
     try:
         record["features_sha256"] = features_sha256(features)
+        record["features_sorted_sha256"] = features_sorted_sha256(features)
+        record["values_sha256"] = values_sha256(features)
     except Exception:
-        record["features_sha256"] = None
+        record["features_sha256"] = record["features_sorted_sha256"] = record["values_sha256"] = None
     props = [f["properties"] for f in features]
     units = {p.get("unit_of_measure") for p in props}
     if len(units) != 1:

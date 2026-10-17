@@ -16,6 +16,11 @@ content: the same data fetched at two times had different digests (parsed JSON i
   `content_sha256` (one per response, same order as `response_sha256`), `features_sha256` (over the
   canonical features of the series actually used, in order; independent of paging) and
   `volatile_envelope_keys`. `response_sha256` is kept unchanged.
+- Two further series-level digests: `features_sorted_sha256` (features sorted by time then id, independent of
+  served order) and `values_sha256` over `[time, value, qualifier, approval_status]` only (sorted by time and
+  series id). Equal `values_sha256` with different `features_sha256` means the records were touched
+  (`last_modified` bumped) but the data did not change.
+- A body that cannot be canonicalised (non-finite number) records `content_sha256: null`, never a guess.
 - `usgs_waterdata.content_sha256`, `features_sha256`, `VOLATILE_ENVELOPE_KEYS`. Canonical JSON = sorted
   keys, no whitespace, UTF-8. Volatile set, read from the recorded fixtures: top-level `timeStamp` and
   `links` (self/alternate hrefs and the `rel=next` cursor). `numberReturned` and every per-feature field,

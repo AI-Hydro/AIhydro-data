@@ -800,3 +800,58 @@ def test_paged_series_has_one_content_digest_per_page_and_cursor_free_identity(r
     assert len(p.upstream["content_sha256"]) == 4 and None not in p.upstream["content_sha256"]
     single = uw.get_daily("01013500", "1989-10-01", "2009-09-30")
     assert p.upstream["features_sha256"] == single.upstream["features_sha256"]   # same features, any paging
+
+
+# ------------------------------------------------------------- golden digests, N1/N2/N5 (0.2.4)
+# Computed once from the recorded 01013500 WY1990-2009 body; a change to the canonicalisation,
+# the volatile set or the digest scopes changes these on purpose.
+GOLDEN_01013500 = {
+    "content": "0f4d43ab2dab68592b6aaf3bf32f6db117d783fd780665839e6d233971668ce6",
+    "features": "5d769991ed292d27d427a6a80fc102bcf5e7f72f4ebe214cd1ba25ebcf7bf50f",
+    "features_sorted": "fac571e2bf2b60c1eaf41a3d5ad020ff81c792ce4fe59c2ae9ae2f8ca6d58a2e",
+    "values": "6c36870a207bea6078d42f788933c47fd5b99f8ec40014b4c48ef9e9030bb650",
+}
+
+
+def test_golden_digests_on_recorded_01013500_wy1990_2009(replay):
+    d = doc("daily_01013500_wy1990_2009")
+    assert uw.content_sha256(d) == GOLDEN_01013500["content"]
+    assert uw.features_sha256(d["features"]) == GOLDEN_01013500["features"]
+    assert uw.features_sorted_sha256(d["features"]) == GOLDEN_01013500["features_sorted"]
+    assert uw.values_sha256(d["features"]) == GOLDEN_01013500["values"]
+    up = uw.get_daily("01013500", "1989-10-01", "2009-09-30").upstream
+    assert up["content_sha256"] == [GOLDEN_01013500["content"]]
+    assert (up["features_sha256"], up["features_sorted_sha256"], up["values_sha256"]) == (
+        GOLDEN_01013500["features"], GOLDEN_01013500["features_sorted"], GOLDEN_01013500["values"])
+
+
+def test_non_finite_body_gives_content_sha256_none_not_a_crash(monkeypatch):
+    body = b'{"type":"FeatureCollection","features":[],"numberReturned":NaN,"links":[],"timeStamp":"t"}'
+    monkeypatch.setattr(uw, "_http_get", lambda url, params=None, headers=None: (200, {}, body))
+    rec = uw._new_record()
+    uw._request("https://api.waterdata.usgs.gov/ogcapi/v1/collections/daily/items", {"f": "json"}, rec)
+    assert rec["content_sha256"] == [None] and len(rec["response_sha256"]) == 1
+    with pytest.raises(ValueError):
+        uw.content_sha256({"x": float("nan")})
+    with pytest.raises(ValueError):
+        uw.features_sha256([{"x": float("inf")}])
+
+
+def test_sorted_features_digest_is_order_independent_ordered_one_is_not():
+    f = doc("daily_01013500_wy1990_2009")["features"]
+    rev = list(reversed(f))
+    assert uw.features_sha256(f) != uw.features_sha256(rev)
+    assert uw.features_sorted_sha256(f) == uw.features_sorted_sha256(rev)
+    assert uw.values_sha256(f) == uw.values_sha256(rev)
+
+
+def test_values_digest_separates_touched_from_revised():
+    f = json.loads(json.dumps(doc("daily_01013500_wy1990_2009")["features"]))
+    touched = json.loads(json.dumps(f)); touched[3]["properties"]["last_modified"] = "2031-01-01T00:00:00Z"
+    assert uw.values_sha256(touched) == uw.values_sha256(f)                 # same data
+    assert uw.features_sha256(touched) != uw.features_sha256(f)             # but the record was touched
+    for field, new in (("value", "123.4"), ("approval_status", "Provisional"), ("qualifier", ["ESTIMATED", "X"])):
+        rev = json.loads(json.dumps(f)); rev[10]["properties"][field] = new
+        assert uw.values_sha256(rev) != uw.values_sha256(f), field
+    rev = json.loads(json.dumps(f)); rev[10]["properties"]["time"] = "1999-01-01"
+    assert uw.values_sha256(rev) != uw.values_sha256(f)
