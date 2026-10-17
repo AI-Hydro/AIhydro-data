@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _tool_envelope(fn: Any) -> Any:
-    """Decorator: catch AihydroDataError → .to_dict() and bare Exception → _err().
+    """Decorator: let a ToolError through; catch AihydroDataError → .to_dict() and bare Exception → _err().
 
     Applied to every _data_* tool so each one only needs to contain the happy
     path — no repeated try/except boilerplate.
@@ -45,6 +45,12 @@ def _tool_envelope(fn: Any) -> Any:
         try:
             return fn(*args, **kwargs)
         except Exception as exc:
+            try:
+                from fastmcp.exceptions import ToolError
+                if isinstance(exc, ToolError):
+                    raise   # a deliberate MCP error (e.g. USE_ASYNC_TOOL) already carries its envelope
+            except ImportError:
+                pass
             try:
                 from aihydro_data.exceptions import AihydroDataError
                 if isinstance(exc, AihydroDataError):
@@ -225,8 +231,8 @@ def _data_fetch(
 
     Note — slow backends (GloFAS / queued HPC):
         For variables that route to a queued backend (e.g. global streamflow →
-        GloFAS EWDS), this tool returns an immediate redirect to
-        ``data_fetch_background`` rather than blocking the agent loop for minutes.
+        GloFAS EWDS), this tool raises an MCP error (code USE_ASYNC_TOOL,
+        next_tools=['data_fetch_background']) rather than blocking the agent loop for minutes.
         Use data_fetch_background() + get_data_fetch_result() for those variables.
     """
     from aihydro_data._pipeline import fetch
@@ -234,9 +240,8 @@ def _data_fetch(
     # ── Pre-flight: redirect queued backends before they block ────────────────
     is_queued, queued_source = _would_route_to_queued_source(variable, geometry, product)
     if is_queued:
-        return {
-            "error": False,
-            "redirect": True,
+        envelope = {
+            "error": True,
             "code": "USE_ASYNC_TOOL",
             "message": (
                 f"data_fetch cannot be used for variable='{variable}' in this region — "
@@ -258,6 +263,15 @@ def _data_fetch(
             },
             "next_tools": ["data_fetch_background", "get_data_fetch_result"],
         }
+        # An MCP error (isError true) whose text is the JSON envelope. aihydro-data cannot import
+        # ai_hydro.mcp.errors (upward dependency); the host's JSON sniff recognises a plain
+        # ToolError carrying {"error": true, "code": ...}. Without fastmcp, return the dict.
+        try:
+            from fastmcp.exceptions import ToolError
+        except ImportError:
+            return envelope
+        import json
+        raise ToolError(json.dumps(envelope))
 
     result = fetch(
         variable=variable,
