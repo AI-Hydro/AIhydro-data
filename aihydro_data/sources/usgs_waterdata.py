@@ -70,9 +70,10 @@ TERMINAL_CODES = frozenset({
     "GAUGE_REQUIRED", "GAUGE_NOT_FOUND", "GAUGE_AMBIGUOUS",
     "USGS_SITE_INVALID", "USGS_SITE_NOT_FOUND", "USGS_NO_DATA", "USGS_MULTIPLE_SERIES",
     "USGS_APPROVAL_UNKNOWN", "USGS_UNIT_UNKNOWN", "USGS_VALUE_UNPARSEABLE", "USGS_VALUE_SENTINEL",
-    "USGS_DUPLICATE_TIME", "USGS_CHUNK_CONFLICT", "USGS_QUALIFIER_INVALID", "USGS_TIME_NAIVE",
+    "USGS_DUPLICATE_TIME", "USGS_CHUNK_CONFLICT", "USGS_QUALIFIER_INVALID", "USGS_TIME_NAIVE", "USGS_TIME_MISSING",
 })
-TRANSIENT_CODES = frozenset({"USGS_TIMEOUT", "USGS_UNREACHABLE", "USGS_SERVER_ERROR", "USGS_RATE_LIMITED"})
+TRANSIENT_CODES = frozenset({"USGS_TIMEOUT", "USGS_UNREACHABLE", "USGS_SERVER_ERROR", "USGS_RATE_LIMITED",
+                             "USGS_TRANSPORT_ERROR"})
 
 
 def _err(code: str, message: str, recovery: str = "", **details: Any) -> SourceUnavailable:
@@ -118,6 +119,8 @@ def _http_get(url: str, params: Optional[Mapping[str, Any]] = None,
         raise _err("USGS_TIMEOUT", f"timeout talking to {host}", "retry later") from e
     except requests.exceptions.ConnectionError as e:
         raise _err("USGS_UNREACHABLE", f"cannot reach {host}", "check the network / retry later") from e
+    except requests.exceptions.RequestException as e:      # ChunkedEncodingError, ContentDecodingError, ...
+        raise _err("USGS_TRANSPORT_ERROR", f"{type(e).__name__} talking to {host}", "retry later") from e
     return r.status_code, dict(r.headers), r.content
 
 
@@ -176,7 +179,7 @@ def _site_id(site: str) -> str:
     s = str(site).strip()
     if s.upper().startswith("USGS-"):
         s = s[5:]
-    if not re.fullmatch(r"\d{8,15}", s):
+    if not re.fullmatch(r"[0-9]{8,15}", s):
         raise _err("USGS_SITE_INVALID", f"{site!r} is not an 8-15 digit USGS site number")
     return f"USGS-{s}"
 
@@ -195,13 +198,25 @@ def _ts(s: str) -> pd.Timestamp:
     return pd.Timestamp(s)
 
 
+def _date10(x) -> str:
+    """'YYYY-MM-DD' from a date/datetime or an ASCII ISO string; anything else is refused."""
+    if isinstance(x, (_dt.date, pd.Timestamp)):
+        return x.strftime("%Y-%m-%d")
+    s = str(x)
+    if not (s.isascii() and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}([T ].*)?", s, re.ASCII)):
+        raise _err("USGS_BAD_WINDOW", f"{s!r} is not an ISO date (YYYY-MM-DD)")
+    return s[:10]
+
+
 def _norm_instant(x, end_of_day: bool = False) -> str:
     if isinstance(x, (_dt.datetime, pd.Timestamp)):
         t = pd.Timestamp(x)
         t = t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
         return t.strftime("%Y-%m-%dT%H:%M:%SZ")
     s = str(x)
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+    if not s.isascii():
+        raise _err("USGS_BAD_WINDOW", f"non-ASCII characters in time {s!r}")
+    if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", s):
         return f"{s}T23:59:59Z" if end_of_day else f"{s}T00:00:00Z"
     return _norm_instant(pd.Timestamp(s))
 
@@ -313,7 +328,7 @@ def _empty_outcome(site_id: str, parameter_code: str, statistic_id: Optional[str
                         for f in loc if f["properties"].get("parameter_code") == parameter_code])
 
 
-_VALUE_RE = re.compile(r"-?\d+(\.\d+)?([eE][+-]?\d+)?")
+_VALUE_RE = re.compile(r"-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?", re.ASCII)
 LEGACY_SENTINEL = -999999.0          # legacy noDataValue; must never reach a discharge series
 
 
@@ -340,7 +355,7 @@ def _parse_qualifier(q: Any, when: Any) -> tuple:
 
 
 def _has_zone(t: Any) -> bool:
-    return isinstance(t, str) and bool(re.search(r"(Z|[+-]\d{2}:?\d{2})$", t))
+    return isinstance(t, str) and bool(re.search(r"(Z|[+-][0-9]{2}:?[0-9]{2})$", t, re.ASCII))
 
 
 def _gap_stats(df: pd.DataFrame, continuous: bool, window: Optional[tuple]) -> dict:
@@ -388,6 +403,12 @@ def _build(features: list[dict], site_id: str, parameter_code: str, statistic_id
            window: Optional[tuple] = None) -> UsgsSeries:
     if not features:
         raise _empty_outcome(site_id, parameter_code, statistic_id, record)
+    for f in features:
+        if not isinstance(f, dict) or not isinstance(f.get("properties"), dict):
+            raise _err("USGS_BAD_BODY", "feature without a properties object")
+        t = f["properties"].get("time")
+        if not isinstance(t, str) or not t:
+            raise _err("USGS_TIME_MISSING", f"feature without a usable time: {t!r}")
     ids = sorted({f["properties"].get("time_series_id") for f in features})
     if time_series_id is not None:
         features = [f for f in features if f["properties"].get("time_series_id") == time_series_id]
@@ -461,12 +482,12 @@ def get_daily(site, start, end, parameter_code: str = "00060", statistic_id: str
     sid = _site_id(site)
     rec = _new_record()
     p = {"monitoring_location_id": sid, "parameter_code": parameter_code, "statistic_id": statistic_id,
-         "time": f"{str(start)[:10]}/{str(end)[:10]}", "limit": int(limit), "f": "json"}
+         "time": f"{_date10(start)}/{_date10(end)}", "limit": int(limit), "f": "json"}
     if time_series_id:
         p["time_series_id"] = time_series_id
     feats = _paged_features(f"{BASE}/collections/daily/items", p, rec)
     return _build(feats, sid, parameter_code, statistic_id, time_series_id, rec, continuous=False,
-                  window=(str(start)[:10], str(end)[:10]))
+                  window=(_date10(start), _date10(end)))
 
 
 def get_continuous(site, start, end, parameter_code: str = "00060", *,
