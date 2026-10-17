@@ -49,6 +49,15 @@ The `.manifest.json` sidecar is an append-only JSON list. Each write adds a new
 entry so re-fetches with different backends are tracked. The most-recent entry
 wins for display in `cache_status()`.
 
+Observation provenance (NWIS): the entry also records `site_resolution` (how the gauge was
+identified, ADR-003 amendment A2), `quality` (approval/qualifier counts, `provisional_fraction`)
+and `upstream` (request URLs without any key, response sha256s, retrieval time, Last-Modified/ETag
+when the server sent them) plus `data_sha256` of the cached data file.
+
+Integrity on read: the data file is re-hashed and a mismatch is a miss. An entry holding
+provisional values expires after `AIHYDRO_DATA_PROVISIONAL_TTL_DAYS` (default 7) and the miss is
+recorded in `fallback_history` as `provisional entry expired`; fully approved entries never expire.
+
 ## Performance notes
 
 - Parquet files compress well with Snappy (~10× vs CSV for typical CONUS daily data).

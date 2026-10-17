@@ -3,7 +3,45 @@
 All notable changes to `aihydro-data` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.2.3] — 2026-10-17
+
+Wave U summary (data layer). **U1a:** new `sources/usgs_waterdata.py` for the USGS Water Data OGC API
+(daily, continuous, time-series metadata, monitoring locations), written against 79 recorded responses
+under `tests/fixtures/usgs_waterdata/` (including the last-chance legacy waterservices bytes); strict value,
+approval and qualifier handling, no redirects, https-only. **U1b:** `NWIS_STREAMFLOW` wired through it, the
+centroid gauge walk replaced by ADR-003 amendment A2 (`resolve_gauge`), terminal refusals that never fall
+through to modelled flow, `site_resolution`/`quality`/`upstream` on `FetchResult` and the manifest, cache
+sha256 + provisional TTL, `fetch(gauge_id=, basin_ref=)`. Review rounds fixed: key leakage across redirects,
+silent value coercion, branch-dependent network distance, Unicode digits, and several coded-error gaps.
+Decisions are in `DECISIONS.md` (2026-10-17).
+
+### Added - gauge identity through fetch(): `gauge_id=` and `basin_ref=`
+
+- `fetch(..., gauge_id=None, basin_ref=None)`: ADR-003 A2 R0 precedence (explicit id > BasinRef `usgs:` alias >
+  outlet); a polygon is the area basis; for an id or alias a failed area check is a warning on the result and
+  manifest, never a refusal; an id/alias conflict refuses `GAUGE_AMBIGUOUS`. Both enter the cache key.
+  Collections take `{label: value}` mappings (`fetch_batch(gauge_ids=, basin_refs=)`) and refuse a single value
+  (`GAUGE_WITH_COLLECTION`).
+- The `outlet` cache-key component is rounded to 1e-7 degrees (~1 cm), so gauge-derived outlets that differ by
+  ~1e-9 degrees do not split the cache. (Entries written before this release are streamflow-revision 1 and are
+  misses anyway.)
+
+### Changed - NWIS streamflow comes from the USGS Water Data API; gauge identity is never guessed (Wave U)
+
+- `NWIS_STREAMFLOW` now reads the Water Data OGC API (`sources/usgs_waterdata.py`) instead of
+  `dataretrieval`/waterservices (which is decommissioned 2027-02-22). The served frame keeps
+  `approval_status`/`approval_code` and `qualifier`/`qualifier_code` per row; `FetchResult` and
+  `ManifestEntry` gain `site_resolution`, `quality` and `upstream` (plus `data_sha256`).
+- The centroid walk (`_nearest_nwis_gauge`: first NLDI site, errors swallowed) is deleted.
+  Gauges are resolved by ADR-003 amendment A2: explicit id, or outlet + drainage-area agreement.
+  `GAUGE_REQUIRED` / `GAUGE_NOT_FOUND` / `GAUGE_AMBIGUOUS` are terminal (`TerminalSourceError`)
+  and never fall through to GEOGLOWS/GloFAS.
+- Cache: streamflow revision 2 (old entries are misses); entries are re-hashed on read; entries with
+  provisional values expire after `AIHYDRO_DATA_PROVISIONAL_TTL_DAYS` (default 7).
+- Extras: `hydrofunctions` dropped; `direct` replaced by `legacy-usgs` (`dataretrieval`), used only by
+  the temporary D3 switch `AIHYDRO_USGS_BACKEND=legacy_waterservices`, deleted 2027-01-08.
+- Fixed: `fetch()` on a collection and `fetch_batch()` silently dropped `region=`; `outlet=` with a
+  collection is now refused (it would apply to one item only).
 
 ### Changed - the queued-backend redirect is an MCP error (Wave U, U4)
 

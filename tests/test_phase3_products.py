@@ -115,7 +115,7 @@ class TestStreamflowProducts:
         # Either installed or gives a clean message — never raises
         assert isinstance(ok, bool)
         if not ok:
-            assert "dataretrieval" in reason or "hyriver" in reason.lower()
+            assert "opendap" in reason.lower() or "requests" in reason.lower()
 
     def test_gauge_id_helper_string(self):
         from aihydro_data.sources.direct_api import _gauge_id_from_geometry

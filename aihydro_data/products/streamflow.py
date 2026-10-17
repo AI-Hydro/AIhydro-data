@@ -2,7 +2,7 @@
 Streamflow product registry.
 
 IDs:
-    NWIS_STREAMFLOW   – USGS NWIS daily streamflow, CONUS, direct_api backend
+    NWIS_STREAMFLOW   – USGS daily streamflow (Water Data OGC API), CONUS, direct_api backend
     GEOGLOWS_RETRO    – GEOGLOWS v2 modelled daily discharge, global, geoglows_retro
                         backend (anonymous AWS S3 Zarr — NO auth, NO queue, 1940→now)
     OPENMETEO_FLOOD   – Open-Meteo Global Flood (GloFAS v4) daily discharge, global,
@@ -26,39 +26,52 @@ PRODUCTS: list[ProductSpec] = [
         id="NWIS_STREAMFLOW",
         variable="streamflow",
         source="direct_api",
-        source_dataset_id="usgs_nwis_dv",
+        source_dataset_id="usgs_waterdata_daily",
         spatial_support="gauge_point",  # observed discharge at a physical gauge
         coverage=["CONUS"],
-        temporal_start="1900-01-01",    # NWIS records vary by gauge; some go back to ~1900
+        temporal_start="1900-01-01",    # USGS records vary by gauge; some go back to ~1900
         temporal_end="present",
         resolution_m=0,                 # point measurement (gauge)
         timestep="daily",
         units="m3/s",
         license="public domain (USGS)",
         citation=(
-            "U.S. Geological Survey (2024). National Water Information System. "
-            "U.S. Geological Survey Water Resources, https://waterdata.usgs.gov/nwis."
+            "U.S. Geological Survey (2026). USGS Water Data APIs, OGC API collection 'daily' "
+            "(daily mean discharge, parameter 00060, statistic 00003). "
+            "https://api.waterdata.usgs.gov/ogcapi/v1. Data from USGS Water Data for the Nation, "
+            "https://waterdata.usgs.gov. The retrieval time and response hashes are in "
+            "result.upstream."
         ),
         bibtex=(
-            "@misc{NWIS2024,\n"
-            "  title        = {National Water Information System ({NWIS})},\n"
-            "  author       = {{U.S. Geological Survey Water Resources Mission Area}},\n"
-            "  year         = {2024},\n"
-            "  howpublished = {\\url{https://waterdata.usgs.gov/nwis}}\n"
+            "@misc{USGSWaterDataAPI2026,\n"
+            "  title        = {{USGS} Water Data {APIs} ({OGC} {API}, collection daily)},\n"
+            "  author       = {{U.S. Geological Survey}},\n"
+            "  year         = {2026},\n"
+            "  howpublished = {\\url{https://api.waterdata.usgs.gov/ogcapi/v1}}\n"
             "}"
         ),
-        homepage="https://waterdata.usgs.gov/nwis",
-        requires_extras=["hyriver"],    # dataretrieval is part of the hyriver stack
-        requires_auth=[],
+        homepage="https://api.waterdata.usgs.gov/docs/ogcapi/",
+        requires_extras=[],             # only `requests`, a base dependency
+        requires_auth=[],               # an api.data.gov key (API_USGS_PAT) is optional; unauthenticated use is rate-limited
         common_pitfalls=[
             "CONUS gauges only — for global streamflow use GRDC_STREAMFLOW (Phase 4).",
-            "geometry is used only to look up the nearest gauge if gauge_id is not provided.",
-            "Pass gauge_id in backend_config or as the geometry to fetch a specific gauge.",
-            "Units are m³/s; divide by watershed area × 86400 for mm/day.",
+            "The gauge is never guessed. Pass a USGS site number as the geometry, or a basin polygon "
+            "together with its outlet (the gauge is then identified by distance along the river AND "
+            "drainage-area agreement, ADR-003 amendment A2). A polygon without an outlet refuses "
+            "GAUGE_REQUIRED; no candidate / several candidates refuse GAUGE_NOT_FOUND / GAUGE_AMBIGUOUS. "
+            "These refusals are terminal: the request is never answered with modelled flow instead.",
+            "Every row keeps USGS's approval_status (Approved/Provisional) and qualifier. Provisional "
+            "values are subject to revision; result.quality.provisional_fraction says how much of the "
+            "series is provisional, and cached provisional data expires "
+            "(AIHYDRO_DATA_PROVISIONAL_TTL_DAYS, default 7).",
+            "Qualifiers other than ESTIMATED (for example FORCEINTERPOLATION) are kept as USGS reports them.",
+            "Units are m³/s (converted from ft³/s with 0.028316846592); divide by watershed area × 86400 for mm/day.",
+            "Without an API key USGS rate-limits requests (HTTP 429 -> USGS_RATE_LIMITED); register a free "
+            "api.data.gov key and export API_USGS_PAT.",
         ],
         examples=[
             "fetch('streamflow', '03245500', '2010-01-01', '2020-12-31')  # gauge_id as geometry",
-            "fetch('streamflow', gdf, '2010-01-01', '2020-12-31')  # nearest NWIS gauge to centroid",
+            "fetch('streamflow', basin_polygon, '2010-01-01', '2020-12-31', outlet=(lat, lon))  # gauge resolved under A2",
         ],
         next_steps=_SF_NEXT_STEPS,
         backend_config={

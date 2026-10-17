@@ -1,0 +1,95 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "USGS-01516500",
+        "agency_code": "USGS",
+        "agency_name": "U.S. Geological Survey",
+        "monitoring_location_number": "01516500",
+        "monitoring_location_name": "Corey Creek near Mainesburg, PA",
+        "district_code": "42",
+        "country_code": "US",
+        "country_name": "United States of America",
+        "state_code": "42",
+        "state_name": "Pennsylvania",
+        "county_code": "117",
+        "county_name": "Tioga County",
+        "minor_civil_division_code": null,
+        "site_type_code": "ST",
+        "site_type": "Stream",
+        "hydrologic_unit_code": "020501040906",
+        "basin_code": null,
+        "altitude": 1337.05,
+        "altitude_accuracy": 0.01,
+        "altitude_method_code": "L",
+        "altitude_method_name": "Level or other surveyed method.",
+        "vertical_datum": "NAVD88",
+        "vertical_datum_name": "North American Vertical Datum of 1988",
+        "horizontal_positional_accuracy_code": "S",
+        "horizontal_positional_accuracy": "Accurate to + or - 1 sec.",
+        "horizontal_position_method_code": "M",
+        "horizontal_position_method_name": "Interpolated from map",
+        "original_horizontal_datum": "NAD27",
+        "original_horizontal_datum_name": "North American Datum of 1927",
+        "drainage_area": 12.2,
+        "contributing_drainage_area": null,
+        "time_zone_abbreviation": "EST",
+        "uses_daylight_savings": "Y",
+        "construction_date": null,
+        "aquifer_code": null,
+        "national_aquifer_code": null,
+        "aquifer_type_code": null,
+        "well_constructed_depth": null,
+        "hole_constructed_depth": null,
+        "depth_source_code": null,
+        "revision_note": null,
+        "revision_created": null,
+        "revision_modified": null
+      },
+      "id": "USGS-01516500",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -77.0146877252087,
+          41.7909074578273
+        ]
+      }
+    }
+  ],
+  "numberReturned": 1,
+  "links": [
+    {
+      "type": "application/geo+json",
+      "rel": "self",
+      "title": "This document as GeoJSON",
+      "href": "https://api.waterdata.usgs.gov/ogcapi/v1/collections/monitoring-locations/items?f=json&id=USGS-01516500"
+    },
+    {
+      "rel": "alternate",
+      "type": "application/ld+json",
+      "title": "This document as RDF (JSON-LD)",
+      "href": "https://api.waterdata.usgs.gov/ogcapi/v1/collections/monitoring-locations/items?f=jsonld&id=USGS-01516500"
+    },
+    {
+      "type": "text/html",
+      "rel": "alternate",
+      "title": "This document as HTML",
+      "href": "https://api.waterdata.usgs.gov/ogcapi/v1/collections/monitoring-locations/items?f=html&id=USGS-01516500"
+    },
+    {
+      "type": "text/csv; charset=utf-8",
+      "rel": "alternate",
+      "title": "This document as CSV",
+      "href": "https://api.waterdata.usgs.gov/ogcapi/v1/collections/monitoring-locations/items?f=csv&id=USGS-01516500"
+    },
+    {
+      "type": "application/json",
+      "title": "Monitoring locations",
+      "rel": "collection",
+      "href": "https://api.waterdata.usgs.gov/ogcapi/v1/collections/monitoring-locations"
+    }
+  ],
+  "timeStamp": "2026-10-17T09:58:10.033916Z"
+}

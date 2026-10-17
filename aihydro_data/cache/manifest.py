@@ -49,6 +49,10 @@ class ManifestEntry:
         product_identity: dict[str, Any] | None = None,
         fallback_history: list[dict[str, str]] | None = None,
         geom_id: str | None = None,
+        site_resolution: dict[str, Any] | None = None,
+        quality: dict[str, Any] | None = None,
+        upstream: dict[str, Any] | None = None,
+        data_sha256: str | None = None,
     ) -> None:
         self.cache_key = cache_key
         self.variable = variable
@@ -70,6 +74,13 @@ class ManifestEntry:
         self.fallback_history = fallback_history or []
         # aihydro.geom/1 id; absent on entries written before result_schema 5.
         self.geom_id = geom_id
+        # Wave U: observation provenance. Absent (empty/None) on older entries.
+        self.site_resolution = site_resolution or {}
+        self.quality = quality or {}
+        self.upstream = upstream or {}
+        # sha256 of the cached data file; cache_read re-hashes and treats a
+        # mismatch as a miss.
+        self.data_sha256 = data_sha256
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -92,6 +103,10 @@ class ManifestEntry:
             "product_identity": self.product_identity,
             "fallback_history": self.fallback_history,
             "geom_id": self.geom_id,
+            "site_resolution": self.site_resolution,
+            "quality": self.quality,
+            "upstream": self.upstream,
+            "data_sha256": self.data_sha256,
         }
 
     @classmethod
@@ -116,6 +131,10 @@ class ManifestEntry:
             product_identity=d.get("product_identity", {}),
             fallback_history=d.get("fallback_history", []),
             geom_id=d.get("geom_id"),
+            site_resolution=d.get("site_resolution", {}),
+            quality=d.get("quality", {}),
+            upstream=d.get("upstream", {}),
+            data_sha256=d.get("data_sha256"),
         )
 
 

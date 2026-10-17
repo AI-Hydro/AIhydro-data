@@ -15,7 +15,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aihydro-data"
-version = "0.2.2"
+version = "0.2.3"
 description = "Global hydrology dataverse — multi-source, region-aware data fetch (GEE + STAC + HyRiver) for AI agents and humans"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -82,15 +82,17 @@ hyriver = [
     "pygridmet>=0.15.0",
     "pydaymet>=0.16.0",   # sources/hyriver.py imports this directly for DAYMET_* products
     "py3dep>=0.15.0",
-    "hydrofunctions>=0.2.0",
     "rioxarray>=0.15.0",
     "xarray>=2023.0.0",
 ]
 
-# Direct-API backend (sources/direct_api.py) — NWIS, GRDC, NLDI direct HTTP
-direct = [
-    "hydrofunctions>=0.2.0",
-    "dataretrieval>=1.0",   # sources/direct_api.py imports this directly for NWIS_STREAMFLOW
+# NWIS streamflow now comes from the USGS Water Data OGC API
+# (sources/usgs_waterdata.py) and needs only requests + pandas (base dependencies).
+# This extra exists solely for the D3 switch AIHYDRO_USGS_BACKEND=legacy_waterservices
+# (dataretrieval.nwis -> waterservices.usgs.gov, decommissioned 2027-02-22).
+# The switch and this extra are deleted on 2027-01-08.
+legacy-usgs = [
+    "dataretrieval>=1.0",
 ]
 
 # OPeNDAP backend — auth-free data sources via IRI Data Library / Unidata
@@ -148,7 +150,7 @@ viz = [
 
 # Full install — everything except dev tooling
 all = [
-    "aihydro-data[gee,stac,hyriver,direct,opendap,glofas,geoglows,pygeoglim,cache,mcp,viz]",
+    "aihydro-data[gee,stac,hyriver,opendap,glofas,geoglows,pygeoglim,cache,mcp,viz]",
 ]
 
 # Development

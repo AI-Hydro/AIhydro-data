@@ -110,51 +110,9 @@ def _nldi_router(responses: dict[str, _FakeResp]):
     return fake_get, calls
 
 
-class TestNldiNearestGauge:
-    def _backend(self):
-        from aihydro_data.sources.direct_api import Backend
-        return Backend()
-
-    def test_happy_path_upstream_main(self, monkeypatch):
-        import requests
-        fake_get, calls = _nldi_router({
-            "/comid/position": _FakeResp(200, {
-                "features": [{"properties": {"comid": "1234567"}}]}),
-            "/navigation/UM/nwissite": _FakeResp(200, {
-                "features": [{"properties": {"identifier": "USGS-03245500"}}]}),
-        })
-        monkeypatch.setattr(requests, "get", fake_get)
-        site = self._backend()._nearest_nwis_gauge(Point(-84.3, 39.4))
-        assert site == "03245500"
-        assert any("/comid/position" in c for c in calls)
-
-    def test_falls_back_to_downstream_main(self, monkeypatch):
-        import requests
-        fake_get, calls = _nldi_router({
-            "/comid/position": _FakeResp(200, {
-                "features": [{"properties": {"comid": "1234567"}}]}),
-            "/navigation/UM/nwissite": _FakeResp(200, {"features": []}),
-            "/navigation/DM/nwissite": _FakeResp(200, {
-                "features": [{"properties": {"identifier": "USGS-01646500"}}]}),
-        })
-        monkeypatch.setattr(requests, "get", fake_get)
-        site = self._backend()._nearest_nwis_gauge(Point(-77.1, 38.9))
-        assert site == "01646500"
-        assert any("/navigation/DM/" in c for c in calls)
-
-    def test_position_miss_returns_none(self, monkeypatch):
-        import requests
-        fake_get, _ = _nldi_router({
-            "/comid/position": _FakeResp(200, {"features": []}),
-        })
-        monkeypatch.setattr(requests, "get", fake_get)
-        assert self._backend()._nearest_nwis_gauge(Point(0.0, 0.0)) is None
-
-    def test_http_error_returns_none(self, monkeypatch):
-        import requests
-        fake_get, _ = _nldi_router({})  # everything 404s
-        monkeypatch.setattr(requests, "get", fake_get)
-        assert self._backend()._nearest_nwis_gauge(Point(-84.3, 39.4)) is None
+# TestNldiNearestGauge was removed in Wave U / U1b: the centroid walk it tested
+# (_nearest_nwis_gauge: first NLDI site, errors swallowed to None) was deleted.
+# Gauge identification is now ADR-003 amendment A2; see tests/test_usgs_gauge_resolution.py.
 
 
 # ── B3: batch dispatch kwargs + error surfacing ──────────────────────────────

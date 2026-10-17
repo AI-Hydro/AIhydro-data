@@ -1,0 +1,139 @@
+{
+  "recorder": "record_usgs.py (Wave U U0)",
+  "key_sent": false,
+  "entries": [
+    {
+      "name": "legacy_dv_01013500",
+      "url": "https://waterservices.usgs.gov/nwis/dv/?format=json&sites=01013500&parameterCd=00060&statCd=00003&startDT=1989-10-01&endDT=2009-09-30",
+      "method": "GET",
+      "status": 200,
+      "headers": {
+        "Date": "Sat, 17 Oct 2026 09:59:52 GMT",
+        "Content-Encoding": "gzip",
+        "Content-Type": "application/json",
+        "X-UA-Compatible": "IE=edge,chrome=1",
+        "X-Frame-Options": "deny"
+      },
+      "body_sha256": "d661960fc3f4d22c262763ed295a1a22f065d2694b72021e3470fb6691cd727f",
+      "body_bytes": 540470,
+      "file": "037_legacy_dv_01013500.json",
+      "stored_bytes": 540470,
+      "stored_gzipped": false,
+      "retrieved_at": "2026-10-17T09:59:53Z"
+    },
+    {
+      "name": "legacy_dv_01516500",
+      "url": "https://waterservices.usgs.gov/nwis/dv/?format=json&sites=01516500&parameterCd=00060&statCd=00003&startDT=1989-10-01&endDT=2009-09-30",
+      "method": "GET",
+      "status": 200,
+      "headers": {
+        "Date": "Sat, 17 Oct 2026 09:59:57 GMT",
+        "Content-Encoding": "gzip",
+        "Content-Type": "application/json",
+        "X-UA-Compatible": "IE=edge,chrome=1",
+        "X-Frame-Options": "deny"
+      },
+      "body_sha256": "0ca0236a7888ba2cd36380f8504631e2613e74c28932935438fd90a83644a003",
+      "body_bytes": 539093,
+      "file": "038_legacy_dv_01516500.json",
+      "stored_bytes": 539093,
+      "stored_gzipped": false,
+      "retrieved_at": "2026-10-17T09:59:57Z"
+    },
+    {
+      "name": "legacy_dv_03245500",
+      "url": "https://waterservices.usgs.gov/nwis/dv/?format=json&sites=03245500&parameterCd=00060&statCd=00003&startDT=2010-01-01&endDT=2020-12-31",
+      "method": "GET",
+      "status": 200,
+      "headers": {
+        "Date": "Sat, 17 Oct 2026 10:00:03 GMT",
+        "Content-Encoding": "gzip",
+        "Content-Type": "application/json",
+        "X-UA-Compatible": "IE=edge,chrome=1",
+        "X-Frame-Options": "deny"
+      },
+      "body_sha256": "9b2931c75be53886e27d8469d96c396552ccd5dde87a55d13b38137f2f92406e",
+      "body_bytes": 294744,
+      "file": "039_legacy_dv_03245500.json",
+      "stored_bytes": 294744,
+      "stored_gzipped": false,
+      "retrieved_at": "2026-10-17T10:00:03Z"
+    },
+    {
+      "name": "legacy_site_01013500",
+      "url": "https://waterservices.usgs.gov/nwis/site/?format=rdb&sites=01013500&siteOutput=expanded",
+      "method": "GET",
+      "status": 200,
+      "headers": {
+        "Date": "Sat, 17 Oct 2026 10:00:07 GMT",
+        "Content-Encoding": "gzip",
+        "Content-Type": "text/plain;charset=UTF-8",
+        "X-UA-Compatible": "IE=edge,chrome=1",
+        "X-Frame-Options": "deny"
+      },
+      "body_sha256": "48b4755446c81ee3ab1cc866a00501a41d7607b98f282e09fa44729ed95847d8",
+      "body_bytes": 3174,
+      "file": "040_legacy_site_01013500.txt",
+      "stored_bytes": 3174,
+      "stored_gzipped": false,
+      "retrieved_at": "2026-10-17T10:00:07Z"
+    },
+    {
+      "name": "legacy_site_01516500",
+      "url": "https://waterservices.usgs.gov/nwis/site/?format=rdb&sites=01516500&siteOutput=expanded",
+      "method": "GET",
+      "status": 200,
+      "headers": {
+        "Date": "Sat, 17 Oct 2026 10:00:12 GMT",
+        "Content-Encoding": "gzip",
+        "Content-Type": "text/plain;charset=UTF-8",
+        "X-UA-Compatible": "IE=edge,chrome=1",
+        "X-Frame-Options": "deny"
+      },
+      "body_sha256": "36cb18d2c563541490aa039f9cfb1be66a5bf8664ad3e5ea83140338704eb521",
+      "body_bytes": 3153,
+      "file": "041_legacy_site_01516500.txt",
+      "stored_bytes": 3153,
+      "stored_gzipped": false,
+      "retrieved_at": "2026-10-17T10:00:12Z"
+    },
+    {
+      "name": "legacy_site_01109000",
+      "url": "https://waterservices.usgs.gov/nwis/site/?format=rdb&sites=01109000&siteOutput=expanded",
+      "method": "GET",
+      "status": 200,
+      "headers": {
+        "Date": "Sat, 17 Oct 2026 10:00:16 GMT",
+        "Content-Encoding": "gzip",
+        "Content-Type": "text/plain;charset=UTF-8",
+        "X-UA-Compatible": "IE=edge,chrome=1",
+        "X-Frame-Options": "deny"
+      },
+      "body_sha256": "915e4206681f9c465496275e306ab398c2e8bc6f9a6cde3419bdd2bc207d872c",
+      "body_bytes": 3178,
+      "file": "042_legacy_site_01109000.txt",
+      "stored_bytes": 3178,
+      "stored_gzipped": false,
+      "retrieved_at": "2026-10-17T10:00:16Z"
+    },
+    {
+      "name": "legacy_site_03245500",
+      "url": "https://waterservices.usgs.gov/nwis/site/?format=rdb&sites=03245500&siteOutput=expanded",
+      "method": "GET",
+      "status": 200,
+      "headers": {
+        "Date": "Sat, 17 Oct 2026 10:00:20 GMT",
+        "Content-Encoding": "gzip",
+        "Content-Type": "text/plain;charset=UTF-8",
+        "X-UA-Compatible": "IE=edge,chrome=1",
+        "X-Frame-Options": "deny"
+      },
+      "body_sha256": "b275d44163c25e8d4126ec64ddec9a6ab1d26447ef90283847e784fe348d8114",
+      "body_bytes": 3165,
+      "file": "043_legacy_site_03245500.txt",
+      "stored_bytes": 3165,
+      "stored_gzipped": false,
+      "retrieved_at": "2026-10-17T10:00:20Z"
+    }
+  ]
+}

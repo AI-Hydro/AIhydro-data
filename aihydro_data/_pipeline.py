@@ -12,7 +12,9 @@ Pipeline (Phase 2+):
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
+
+from aihydro_data.exceptions import TerminalSourceError
 
 from aihydro_data.contracts import (
     AggregationMode,
@@ -125,6 +127,24 @@ class BatchResult(list):
         self.labels: list[str] = labels
 
 
+def _per_item(value: Any, name: str, ok_value: Callable[[Any], bool],
+              single_marker: str = "") -> Optional[Mapping[str, Any]]:
+    """Gauge identity for a collection must be an explicit ``{label: value}`` mapping: one id
+    applied to many geometries would be wrong for all but one of them."""
+    if value is None:
+        return None
+    is_map = isinstance(value, Mapping) and not (single_marker and single_marker in value)
+    if not is_map or not all(ok_value(v) for v in value.values()):
+        from aihydro_data.exceptions import GeometryInvalid
+        raise GeometryInvalid(
+            code="GAUGE_WITH_COLLECTION",
+            message=f"{name}= identifies one gauge and cannot apply to several geometries.",
+            recovery=f"Pass {name} as a {{label: value}} mapping keyed like the geometries, or call fetch() once per geometry.",
+            next_tools=["data_help"], docs_anchor="batch",
+        )
+    return dict(value)
+
+
 def _looks_like_collection(geom: Any) -> bool:
     """
     Detect "user passed multiple geometries" so fetch() can auto-dispatch
@@ -185,6 +205,8 @@ def fetch(
     validate: Optional[Callable[[FetchResult], bool]] = None,
     region: Optional[str] = None,
     outlet: Optional[tuple[float, float]] = None,
+    gauge_id: Optional[str] = None,
+    basin_ref: Optional[Mapping[str, Any]] = None,
 ) -> FetchResult:
     """
     Fetch one variable for one geometry/time window.
@@ -247,7 +269,29 @@ def fetch(
             GloFAS, Open-Meteo Flood). Defaults to the geometry centroid, which
             often sits off-channel; pass a delineated basin pour point for the
             most reliable main-stem snap. Ignored by areal/gridded backends.
+        gauge_id, basin_ref: USGS gauge identity for NWIS (ADR-003 amendment A2, R0).
+            ``gauge_id`` is a site number ('01013500' or 'USGS-01013500'); ``basin_ref`` is
+            a BasinRef dict whose ``aliases`` may carry a ``usgs`` alias. Precedence is
+            explicit id > alias > outlet; an id that disagrees with an alias refuses
+            GAUGE_AMBIGUOUS (identity_conflict). A polygon passed as ``geometry`` is the
+            area basis for the area check; for an explicit id or alias a failed check is a
+            warning on the result and manifest, never a refusal. Both are part of the cache
+            key and are ignored by non-NWIS products. For collections pass a
+            ``{label: value}`` mapping, or call per geometry.
     """
+    if gauge_id is not None and not isinstance(gauge_id, (str, Mapping)):
+        from aihydro_data.exceptions import GeometryInvalid
+        raise GeometryInvalid(
+            code="GAUGE_ID_INVALID",
+            message=f"gauge_id must be a string such as '01013500' (leading zeros matter), got {type(gauge_id).__name__}.",
+            recovery="Pass the USGS site number as a string.", next_tools=["data_help"], docs_anchor="streamflow#nwis",
+        )
+    if basin_ref is not None and not isinstance(basin_ref, Mapping):
+        from aihydro_data.exceptions import GeometryInvalid
+        raise GeometryInvalid(
+            code="GAUGE_REF_INVALID", message=f"basin_ref must be a BasinRef dict, got {type(basin_ref).__name__}.",
+            recovery="Pass BasinRef.to_dict().", next_tools=["data_help"], docs_anchor="streamflow#nwis",
+        )
     # ── -1. Normalise variable name (alias table + lower/strip) ──────────
     variable = _normalise_variable(variable)
 
@@ -257,11 +301,24 @@ def fetch(
     # batch path so callers don't have to know about fetch_batch() to do
     # multi-geometry fetches.
     if _looks_like_collection(geometry):
+        if outlet is not None:
+            from aihydro_data.exceptions import GeometryInvalid
+            raise GeometryInvalid(
+                code="OUTLET_WITH_COLLECTION",
+                message="outlet= is one point and cannot apply to several geometries; it would be dropped "
+                        "for every item but the one it was meant for.",
+                recovery="Call fetch() once per geometry, each with its own outlet.",
+                next_tools=["data_help"], docs_anchor="batch",
+            )
+        _gids = _per_item(gauge_id, "gauge_id", lambda v: isinstance(v, str))
+        _brefs = _per_item(basin_ref, "basin_ref", lambda v: isinstance(v, Mapping),
+                           single_marker="aliases")
         batch = fetch_batch(
             variable, geometry, start, end,
             mode=mode, product=product, fallback=fallback,
             aggregation=aggregation, cache=cache,
             index=index, native_resolution=native_resolution, validate=validate,
+            region=region, gauge_ids=_gids, basin_refs=_brefs,
         )
         errors: dict[str, Exception] = batch["errors"]
         results = [batch["results"][lbl] for lbl in batch["labels"]
@@ -330,6 +387,8 @@ def fetch(
         cache=cache,
         region=region,
         outlet=outlet,
+        gauge_id=gauge_id,
+        basin_ref=dict(basin_ref) if basin_ref is not None else None,
     )
 
     # ── 2. Coerce geometry ────────────────────────────────────────────────
@@ -426,16 +485,31 @@ def fetch(
         "geom_id": geom_id,
         "geom_key": "aihydro.geom/1",
     }
+    if variable == "streamflow":
+        # The served data differ by USGS backend (Water Data API vs the legacy D3 switch).
+        import os as _os
+        key_payload["usgs_backend"] = _os.environ.get("AIHYDRO_USGS_BACKEND", "").strip().lower() or "waterdata"
     if mode == "manual" and product:
         key_payload["product"] = product
     if index:
         key_payload["index"] = index.upper()
     if native_resolution:
         key_payload["native_resolution"] = True
+    if req.gauge_id is not None:
+        _g = str(req.gauge_id).strip().upper().replace("USGS:", "USGS-")
+        key_payload["gauge_id"] = _g if _g.startswith("USGS-") or not _g.isdigit() else f"USGS-{_g}"
+    if req.basin_ref is not None:
+        # The identity the ref asserts (aliases) matters; hash the whole dict so a changed ref never
+        # reuses an entry resolved under another one.
+        import json as _json
+        key_payload["basin_ref"] = _json.dumps(req.basin_ref, sort_keys=True, default=str)
     if req.outlet is not None:
         # Reach/cell backends select against this point, which can differ for
         # two requests with the same basin polygon.
-        key_payload["outlet"] = tuple(req.outlet)
+        # Rounded to 1e-7 deg (~1 cm): the same pour point derived by two code paths
+        # (e.g. gauge coordinates from the Water Data API vs legacy waterservices) differs
+        # by ~1e-9 deg and must not split the cache.
+        key_payload["outlet"] = tuple(round(float(c), 7) for c in req.outlet)
     ck = _make_key(key_payload)
 
     history: list[dict[str, str]] = []
@@ -448,7 +522,11 @@ def fetch(
         # A manual pin can still have fallbacks. A later strict request must
         # not reuse a fallback product written under the same pinned key.
         allowed = [s.id for s in candidate_specs]
-        cached = cache_read(ck, req, allowed_products=allowed)
+        _miss_reasons: list[str] = []
+        cached = cache_read(ck, req, allowed_products=allowed, miss_reasons=_miss_reasons)
+        for _why in _miss_reasons:
+            history.append({"product": variable, "source": "cache",
+                            "outcome": "rejected", "reason": _why})
         if cached is not None:
             accepted = True
             if validate is not None:
@@ -516,10 +594,21 @@ def fetch(
             # product-agnostic in auto mode.
             if cache:
                 try:
-                    cache_write(result, geom_wkt=geom_wkt, geom_id=geom_id)
+                    _sha = cache_write(result, geom_wkt=geom_wkt, geom_id=geom_id)
+                    if _sha:
+                        result = result.model_copy(update={"upstream": {**result.upstream, "data_sha256": _sha}})
                 except Exception as ce:
                     log.debug("Cache write failed (non-fatal): %s", ce)
             return result
+        except TerminalSourceError as term:
+            # Identity/integrity refusal (e.g. GAUGE_AMBIGUOUS): the question "which
+            # gauge?" has no answer, so no other product may answer it. Never walk on.
+            history.append({
+                "product": spec.id, "source": spec.source,
+                "outcome": "refused", "reason": f"{term.code}: {term.message}",
+            })
+            term.details = {**term.details, "fallback_history": history, "product": spec.id}
+            raise
         except _EmptyResult as empty:
             # Empty-but-successful → reject (not "failed") and keep walking the
             # chain. Recorded distinctly so the decision trail shows it was a
@@ -585,9 +674,13 @@ RESULT_SCHEMA_VERSION = 5
 #   streamflow 1: results used to be labelled with the product-spec unit even
 #                 when the payload declared another spelling or unit; they now
 #                 record the declared unit and `units_spec` (2026-10-03).
+#   streamflow 2: NWIS now comes from the USGS Water Data API with per-value
+#                 approval/qualifier columns, an A2-resolved gauge and recorded
+#                 provenance; entries without those must not be served
+#                 (Wave U, 2026-10-17).
 #   dem 1:        small CONUS requests now route to 3DEP 10 m before GLO-30
 #                 (2026-09-29); old GLO-30 entries for them must not be reused.
-_VARIABLE_CACHE_REVISION: dict[str, int] = {"impervious": 1, "dem": 1, "streamflow": 1}
+_VARIABLE_CACHE_REVISION: dict[str, int] = {"impervious": 1, "dem": 1, "streamflow": 2}
 
 
 def _result_schema_for(variable: str) -> int | str:
@@ -839,7 +932,9 @@ def _fetch_one(
         # them. outlet lets callers pass a delineated pour point instead of the
         # geometry centroid for GEOGLOWS/GloFAS/Open-Meteo snapping (S5).
         data = _call(backend.fetch_timeseries, spec, geom, start, end, _agg,
-                     outlet=getattr(req, "outlet", None))
+                     outlet=getattr(req, "outlet", None),
+                     gauge_id=getattr(req, "gauge_id", None),
+                     basin_ref=getattr(req, "basin_ref", None))
 
     # ── Empty-result gate (S3) ────────────────────────────────────────────────
     # A backend that returns no usable data (e.g. NWIS with no record for the
@@ -870,6 +965,18 @@ def _fetch_one(
                 f"{spec.id!r}: every value was a fill value or physically impossible "
                 f"({_n_masked} masked); nothing usable for {start}..{end}."
             )
+
+    # Observation provenance attached by the backend (NWIS: gauge resolution,
+    # quality summary, upstream). Popped so it is not also embedded in the
+    # parquet metadata; it rides on the result and the manifest instead.
+    _site_res = _quality = _upstream = {}
+    try:
+        _a = data.attrs
+        _site_res = dict(_a.pop("aihydro_site_resolution", {}) or {})
+        _quality = dict(_a.pop("aihydro_quality", {}) or {})
+        _upstream = dict(_a.pop("aihydro_upstream", {}) or {})
+    except Exception:
+        pass
 
     # Harvest backend-attached caveats (e.g. "polygon mask failed") so
     # degradations surface on the result instead of dying in debug logs.
@@ -933,6 +1040,9 @@ def _fetch_one(
         aggregation_actual=agg_actual,
         next_steps=list(spec.next_steps),
         notes=notes,
+        site_resolution=_site_res,
+        quality=_quality,
+        upstream=_upstream,
     )
 
 
@@ -954,6 +1064,9 @@ def fetch_batch(
     index: Optional[str] = None,
     native_resolution: bool = False,
     validate: Optional[Callable[[FetchResult], bool]] = None,
+    region: Optional[str] = None,
+    gauge_ids: Optional[Mapping[str, str]] = None,
+    basin_refs: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> dict[str, Any]:
     """
     Fetch one variable for multiple geometries in parallel.
@@ -984,6 +1097,14 @@ def fetch_batch(
     index, native_resolution, validate
         Forwarded verbatim to each per-geometry fetch() call (spectral index
         name, native-resolution raster export, quality-gate callback).
+    region
+        Routing-region override, forwarded to every per-geometry fetch(). (It
+        used to be silently dropped on the batch path.) ``outlet`` is a single
+        point and is deliberately not accepted here; fetch() refuses it for
+        collections.
+    gauge_ids, basin_refs
+        ``{label: site}`` / ``{label: BasinRef}`` per-item USGS gauge identity (see fetch()).
+        Labels without an entry get none.
 
     Returns
     -------
@@ -1000,6 +1121,18 @@ def fetch_batch(
     from aihydro_data.geometry.batch import iter_geometries
 
     pairs = list(iter_geometries(geometries))
+    _labels = {p[0] for p in pairs}
+    for _name, _m in (("gauge_ids", gauge_ids), ("basin_refs", basin_refs)):
+        _unknown = sorted(str(k) for k in (_m or {}) if k not in _labels)
+        if _unknown:
+            from aihydro_data.exceptions import GeometryInvalid
+            raise GeometryInvalid(
+                code="GAUGE_LABEL_UNKNOWN",
+                message=f"{_name} has keys that match no geometry label: {_unknown} (labels: {sorted(_labels)}). "
+                        "Silently ignoring them would fetch those items without the identity you gave.",
+                recovery="Key the mapping by the geometry labels.",
+                next_tools=["data_help"], docs_anchor="batch",
+            )
     if not pairs:
         return {"results": {}, "errors": {}, "labels": [], "variable": variable,
                 "start": start, "end": end}
@@ -1027,6 +1160,9 @@ def fetch_batch(
             index=index,
             native_resolution=native_resolution,
             validate=validate,
+            region=region,
+            gauge_id=(gauge_ids or {}).get(label),
+            basin_ref=(basin_refs or {}).get(label),
         )
         return label, result
 
