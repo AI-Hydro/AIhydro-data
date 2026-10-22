@@ -195,6 +195,7 @@ def cache_read(
     # remains unknown rather than being invented from today's ProductSpec.
     _units = _timestep = ""
     _units_spec = _units_declared = ""
+    _spec = None
     _res_m = None
     _pitfalls: list[str] = []
     try:
@@ -218,8 +219,11 @@ def cache_read(
     # Coverage is a property of the restored data against the requested window,
     # so recompute it rather than trusting anything stored.
     try:
-        from aihydro_data._pipeline import _temporal_coverage
-        _cov = _temporal_coverage(data, _req.start, _req.end, timestep=_timestep)
+        from aihydro_data._pipeline import _temporal_coverage, _skips_leap_dec31
+        _cov = _temporal_coverage(
+            data, _req.start, _req.end, timestep=_timestep,
+            skip_leap_dec31=_skips_leap_dec31(_spec) if _spec is not None else False,
+        )
     except Exception:
         _cov = {}
 

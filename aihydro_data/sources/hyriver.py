@@ -9,7 +9,12 @@ Install: pip install aihydro-data[hyriver]
 """
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
+import shutil
+import tempfile
+import threading
 from typing import Any, Optional
 
 from aihydro_data.contracts import AggregationMode, ProductSpec
@@ -116,6 +121,124 @@ def _basin_aggregate_to_frame(data: Any, var_key: str, how: str = "mean") -> Any
     raise TypeError(
         f"_basin_aggregate_to_frame: unexpected input type {type(data).__name__}"
     )
+
+
+# ── Chunked, validated GridMET fetch ─────────────────────────────────────
+#
+# pygridmet 0.19.4 downloads one file per calendar year into a shared on-disk
+# cache named by sha256(url), merges them with xr.merge and retries only on
+# NaNs. A cache file holding the WRONG year (observed: the 1999 file contains
+# 2006) merges silently, dropping a whole year. We therefore fetch per calendar
+# year, check each chunk's time coordinate against its own request, retry a bad
+# chunk once with a fresh private cache directory, and never merge a chunk that
+# still fails. Evidence: docs/vision-2040/evidence/gridmet-chunk-defect-1.
+#
+# Retry isolation: pygridmet reads HYRIVER_CACHE_NAME at call time
+# (`_utils.download_files`), and that env var is process-global inside the
+# long-running MCP server. We serialise GridMET calls under one process lock and
+# set/restore the variable inside it, rather than spawning a subprocess: a
+# subprocess would have to re-import the geospatial stack and pickle the
+# geometry for a rare path, and could not be exercised with an in-process
+# monkeypatched client. Cost: GridMET fetches in one process run one at a time.
+# Other HyRiver libraries called concurrently could write their cache into the
+# temporary directory during a retry; that only loses their cache entry.
+_HYRIVER_ENV_LOCK = threading.RLock()
+_HYRIVER_CACHE_ENV = "HYRIVER_CACHE_NAME"
+
+
+@contextlib.contextmanager
+def _private_hyriver_cache():
+    """Point HYRIVER_CACHE_NAME at a fresh temp dir; restore and delete after.
+    Caller must hold ``_HYRIVER_ENV_LOCK``."""
+    tmp = tempfile.mkdtemp(prefix="aihydro_hyriver_")
+    prev = os.environ.get(_HYRIVER_CACHE_ENV)
+    os.environ[_HYRIVER_CACHE_ENV] = os.path.join(tmp, "aiohttp_cache.sqlite")
+    try:
+        yield tmp
+    finally:
+        if prev is None:
+            os.environ.pop(_HYRIVER_CACHE_ENV, None)
+        else:
+            os.environ[_HYRIVER_CACHE_ENV] = prev
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _times_of(obj: Any) -> Any:
+    """Time coordinate of a fetched chunk (DataFrame or xarray)."""
+    import pandas as pd
+
+    if isinstance(obj, pd.DataFrame):
+        for c in ("date", "time"):
+            if c in obj.columns:
+                return obj[c]
+        return obj.index
+    return obj[_find_time_dim(obj)].values
+
+
+def _chunked_daily(fetch: Any, start: str, end: str, label: str
+                   ) -> tuple[Any, list[dict[str, Any]]]:
+    """Fetch ``[start, end]`` per calendar year, validate each chunk, retry a bad
+    one once with a private cache, drop it if it still fails. Returns
+    ``(merged, failures)``; raises if no chunk survives or the merge would
+    contain duplicate days."""
+    import pandas as pd
+    import xarray as xr
+
+    from aihydro_data import _daily_validation as dv
+
+    parts: list[Any] = []
+    failures: list[dict[str, Any]] = []
+    for cs, ce in dv.year_chunks(start, end):
+        def _ok(chunk: Any) -> dict[str, Any]:
+            return dv.validate_daily_series(
+                _times_of(chunk), str(cs.date()), str(ce.date()),
+                chunks=[(cs, ce, _times_of(chunk))], skip_leap_dec31=True)
+
+        with _HYRIVER_ENV_LOCK:
+            chunk = fetch(str(cs.date()), str(ce.date()))
+            verdict = _ok(chunk)
+            if not verdict["ok"]:
+                log.warning("%s chunk %s..%s failed validation (%s); retrying once "
+                            "with a private cache", label, cs.date(), ce.date(),
+                            "; ".join(verdict["problems"]))
+                with _private_hyriver_cache():
+                    chunk = fetch(str(cs.date()), str(ce.date()))
+                verdict = _ok(chunk)
+        if verdict["ok"]:
+            parts.append(chunk)
+        else:
+            failures.append({"start": str(cs.date()), "end": str(ce.date()),
+                             "reason": dv.CHUNK_MISMATCH,
+                             "problems": verdict["problems"], "retried": True})
+
+    if not parts:
+        raise RuntimeError(
+            f"{label}: every yearly chunk failed validation after one retry with a "
+            f"private cache ({failures}); nothing was merged.")
+    first = parts[0]
+    if len(parts) == 1:
+        merged = first
+    elif isinstance(first, pd.DataFrame):
+        merged = pd.concat(parts)
+    else:
+        merged = xr.concat(parts, dim=_find_time_dim(first))
+    final = dv.validate_daily_series(_times_of(merged), start, end, skip_leap_dec31=True)
+    if final["duplicates"]:
+        raise RuntimeError(f"{label}: merged series has {final['duplicates']} duplicate "
+                           f"timestamp(s); refusing to return it.")
+    return merged, failures
+
+
+def _attach_chunk_failures(out: Any, failures: list[dict[str, Any]]) -> Any:
+    if failures:
+        out.attrs["aihydro_chunk_validation"] = {"failures": failures}
+        out.attrs["aihydro_notes"] = list(out.attrs.get("aihydro_notes", [])) + [
+            "GridMET yearly chunk(s) failed validation and were NOT merged: "
+            + "; ".join(f"{f['start']}..{f['end']} ({'; '.join(f['problems'])})"
+                        for f in failures)
+            + ". See missing_ranges (reason chunk_mismatch)."
+        ]
+    return out
 
 
 class Backend(SourceBackend):
@@ -233,26 +356,34 @@ class Backend(SourceBackend):
         pygridmet = require_import("pygridmet", extra="hyriver", backend="hyriver")
 
         import pandas as pd
+
         from aihydro_data.sources._retry import call_with_retry
         var_key = cfg["pygridmet_variable"]
+        _failures: list[dict[str, Any]] = []
 
         if aggregation == "centroid":
             # Point-mode fetch: extract at geometry centroid
             c = geometry.centroid
             coords = (c.x, c.y)   # pygridmet expects (lon, lat) — verified live
-            df = call_with_retry(
-                lambda: pygridmet.get_bycoords(coords, dates=(start, end), variables=[var_key]),
-                label="pygridmet.get_bycoords",
+            df, _failures = _chunked_daily(
+                lambda a, b: call_with_retry(
+                    lambda: pygridmet.get_bycoords(coords, dates=(a, b), variables=[var_key]),
+                    label="pygridmet.get_bycoords",
+                ),
+                start, end, "pygridmet.get_bycoords",
             )
         else:
             # Polygon-mode: spatial mean over the geometry
             import geopandas as gpd
             gdf = gpd.GeoDataFrame(geometry=[geometry], crs="EPSG:4326")
-            df = call_with_retry(
-                lambda: pygridmet.get_bygeom(
-                    gdf.geometry.iloc[0], dates=(start, end), variables=[var_key],
+            df, _failures = _chunked_daily(
+                lambda a, b: call_with_retry(
+                    lambda: pygridmet.get_bygeom(
+                        gdf.geometry.iloc[0], dates=(a, b), variables=[var_key],
+                    ),
+                    label="pygridmet.get_bygeom",
                 ),
-                label="pygridmet.get_bygeom",
+                start, end, "pygridmet.get_bygeom",
             )
             # Spatial aggregation. get_bygeom returns an xarray.Dataset, so
             # reduce over the spatial dims (dim=[...]) rather than axis=1.
@@ -277,7 +408,7 @@ class Backend(SourceBackend):
             df = df[["date", num_cols[0]]].rename(columns={num_cols[0]: out_col})
 
         df["date"] = pd.to_datetime(df["date"])
-        return df
+        return _attach_chunk_failures(df, _failures)
 
     def _fetch_gridmet_raster(
         self,
@@ -292,8 +423,16 @@ class Backend(SourceBackend):
         import geopandas as gpd
         var_key = cfg["pygridmet_variable"]
         gdf = gpd.GeoDataFrame(geometry=[geometry], crs="EPSG:4326")
-        ds = pygridmet.get_bygeom(gdf.geometry.iloc[0], dates=(start, end), variables=[var_key])
-        return ds
+        from aihydro_data.sources._retry import call_with_retry
+        ds, failures = _chunked_daily(
+            lambda a, b: call_with_retry(
+                lambda: pygridmet.get_bygeom(gdf.geometry.iloc[0], dates=(a, b),
+                                             variables=[var_key]),
+                label="pygridmet.get_bygeom",
+            ),
+            start, end, "pygridmet.get_bygeom",
+        )
+        return _attach_chunk_failures(ds, failures)
 
     # ── Daymet ───────────────────────────────────────────────────────────
 
@@ -309,6 +448,7 @@ class Backend(SourceBackend):
         pydaymet = require_import("pydaymet", extra="hyriver", backend="hyriver")
 
         import pandas as pd
+
         from aihydro_data.sources._retry import call_with_retry
         var_key = cfg["pydaymet_variable"]
 

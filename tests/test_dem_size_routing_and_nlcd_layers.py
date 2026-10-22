@@ -174,7 +174,7 @@ def test_live_impervious_returns_percent_not_class_codes():
 def test_cache_key_changes_only_for_revised_variables():
     from aihydro_data._pipeline import RESULT_SCHEMA_VERSION, _result_schema_for
 
-    assert _result_schema_for("precipitation") == RESULT_SCHEMA_VERSION
+    assert _result_schema_for("srad") == RESULT_SCHEMA_VERSION   # unlisted -> unchanged key
     assert _result_schema_for("landcover") == RESULT_SCHEMA_VERSION
     assert _result_schema_for("impervious") != RESULT_SCHEMA_VERSION
     assert _result_schema_for("dem") != RESULT_SCHEMA_VERSION

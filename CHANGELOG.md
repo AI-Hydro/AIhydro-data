@@ -3,6 +3,32 @@
 All notable changes to `aihydro-data` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.5] — 2026-10-22
+
+Science Wave 3 (PR-2). A GridMET precipitation fetch for 01031500 (WY1990-2009) came back with 6,935 of 7,305
+days: pygridmet's shared on-disk cache held 2006 data under the 1999 request's name and `xr.merge` silently
+dropped 1999. Evidence (byte-identical files, sha256, URL-to-hash reproduction, 370-day accounting):
+`docs/vision-2040/evidence/gridmet-chunk-defect-1/` in the AI-Hydro workspace.
+
+### Added
+
+- `aihydro_data._daily_validation`: source-agnostic checks for daily series (duplicate timestamps, every
+  requested year present, no internal gaps, each chunk's time coordinate inside its own request). Reusable by Daymet.
+- GridMET (`pygridmet`) is fetched per calendar year and every chunk is validated. A failing chunk is retried
+  once with a fresh private cache directory (`HYRIVER_CACHE_NAME`, serialised under a process lock) and, if it
+  still fails, is NOT merged: it is dropped, a note says so, and coverage is reported incomplete.
+- `FetchResult.days_missing_internal` and `FetchResult.missing_ranges` (run-compressed, over the requested window)
+  for daily products, each range with a reason: `client_calendar_assumption` (pygridmet never requests Dec 31 of
+  leap years; whether GridMET lacks it is UNVERIFIED, so it is disclosed, not called missing in GridMET),
+  `chunk_mismatch`, `absent_in_response`. Also exposed by the MCP fetch summary.
+
+### Changed
+
+- `coverage_complete` is False for a daily product when more than `coverage_tolerance_days` days are absent
+  inside the served span, except days that are only a `client_calendar_assumption`.
+- `_VARIABLE_CACHE_REVISION` gains `precipitation`, `tmax`, `tmin`, `pet` (revision 1): entries cached before
+  this release (possibly cross-wired) no longer match and are re-fetched. Existing cache files are not deleted.
+
 ## [0.2.4] — 2026-10-17
 
 Wave U patch (proof 3, finding E6). The Water Data API body carries a per-response top-level `timeStamp`

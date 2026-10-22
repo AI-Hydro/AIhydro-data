@@ -1,5 +1,17 @@
 # Decisions
 
+## 2026-10-22 — Validate daily gridded output; isolate the retry cache by lock, not subprocess
+
+pygridmet 0.19.4 merges per-year cache files without checking that each holds its own year. We validate output
+against the requested calendar (source-agnostic) and fetch GridMET per calendar year so each chunk can be checked.
+A bad chunk is retried once with a private `HYRIVER_CACHE_NAME` directory and never merged if it still fails. We
+do not reconstruct pygridmet's cache hashes to delete files. The env var is process-global in the MCP server, so
+GridMET calls run under one `RLock` and the variable is set/restored inside it. A subprocess was rejected: it
+re-imports the geospatial stack and pickles geometry for a rare path, and cannot be tested with an in-process
+client. Cost: GridMET fetches in one process are serialised. Leap-year Dec 31 days that pygridmet never requests
+are reported as `client_calendar_assumption` and do not by themselves make coverage incomplete (open question:
+whether GridMET really lacks them). Reviewer flag: that last choice is a judgement call.
+
 ## 2026-10-02 — Cache key uses the canonical geometry id, not WKT
 
 WKT encodes ring start vertex and direction, so the same polygon delivered by

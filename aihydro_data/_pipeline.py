@@ -14,13 +14,12 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Mapping, Optional
 
-from aihydro_data.exceptions import TerminalSourceError
-
 from aihydro_data.contracts import (
     AggregationMode,
     FetchRequest,
     FetchResult,
 )
+from aihydro_data.exceptions import TerminalSourceError
 
 log = logging.getLogger(__name__)
 
@@ -352,6 +351,7 @@ def fetch(
     # the global chain.
     if region is not None:
         from typing import get_args
+
         from aihydro_data.contracts import CoverageTag
         valid_regions = set(get_args(CoverageTag))
         if region not in valid_regions:
@@ -396,8 +396,8 @@ def fetch(
     geom = coerce_geometry(req.geometry)
 
     # ── 3. Detect region + build candidate list ───────────────────────────
-    from aihydro_data.routing import detect_region, resolve_product_ids
     from aihydro_data.products import get_product
+    from aihydro_data.routing import detect_region, resolve_product_ids
 
     # Region override (S4) short-circuits centroid/bbox auto-detection.
     region = req.region if req.region is not None else detect_region(geom)
@@ -464,7 +464,8 @@ def fetch(
     # auto-mode caller gets the same cached series regardless of which
     # backend served it. In manual mode the product is included so users
     # who pin a product don't accidentally pick up another product's data.
-    from aihydro_data.cache import cache_key as _make_key, cache_read, cache_write
+    from aihydro_data.cache import cache_key as _make_key
+    from aihydro_data.cache import cache_read, cache_write
     # Local only: stored in the manifest so cache_read can rebuild a request.
     # It is NOT part of the key; the key uses the canonical geometry id so ring
     # start/direction and hole order do not split the cache.
@@ -680,7 +681,14 @@ RESULT_SCHEMA_VERSION = 5
 #                 (Wave U, 2026-10-17).
 #   dem 1:        small CONUS requests now route to 3DEP 10 m before GLO-30
 #                 (2026-09-29); old GLO-30 entries for them must not be reused.
-_VARIABLE_CACHE_REVISION: dict[str, int] = {"impervious": 1, "dem": 1, "streamflow": 2}
+#   precipitation/tmax/tmin/pet 1: GridMET entries cached before the daily
+#                 output validation can hold a cross-wired year (a 1999 chunk
+#                 that is really 2006, merged silently by pygridmet 0.19.4),
+#                 so they must not be served (Science Wave 3, 2026-10-22).
+_VARIABLE_CACHE_REVISION: dict[str, int] = {
+    "impervious": 1, "dem": 1, "streamflow": 2,
+    "precipitation": 1, "tmax": 1, "tmin": 1, "pet": 1,
+}
 
 
 def _result_schema_for(variable: str) -> int | str:
@@ -700,9 +708,14 @@ _EPOCHAL_TIMESTEPS = frozenset({
 })
 
 
+from aihydro_data._daily_validation import skips_leap_dec31 as _skips_leap_dec31  # noqa: E402
+
+
 def _temporal_coverage(data: Any, start: str, end: str,
                        tolerance_days: int = 1,
-                       timestep: str = "") -> dict[str, Any]:
+                       timestep: str = "",
+                       skip_leap_dec31: bool = False,
+                       chunk_mismatch_ranges: Any = ()) -> dict[str, Any]:
     """Compare the window a caller asked for against the window actually served.
 
     A product whose archive ends before the requested window does not fail — it
@@ -713,10 +726,19 @@ def _temporal_coverage(data: Any, start: str, end: str,
 
     Returns keys matching FetchResult's coverage fields. Unknown/undatable data
     is reported as complete, so we never invent a warning we cannot substantiate.
+
+    For daily products it also looks for gaps *inside* the served span
+    (``days_missing_internal``) and lists every absent day over the requested
+    window as run-compressed ``missing_ranges`` with a reason code
+    (``client_calendar_assumption`` / ``chunk_mismatch`` / ``absent_in_response``,
+    see ``aihydro_data._daily_validation``). Days the client library never asked
+    for (``skip_leap_dec31``) are listed and counted but do not by themselves make
+    the coverage incomplete: whether the source lacks them is unverified.
     """
     out: dict[str, Any] = {
         "coverage_start": "", "coverage_end": "", "coverage_complete": True,
         "days_missing_head": 0, "days_missing_tail": 0,
+        "days_missing_internal": 0, "missing_ranges": [],
         "coverage_tolerance_days": tolerance_days,
     }
     try:
@@ -758,6 +780,18 @@ def _temporal_coverage(data: Any, start: str, end: str,
             days_missing_tail=int(tail),
             coverage_complete=bool(head <= tolerance_days and tail <= tolerance_days),
         )
+        from aihydro_data import _daily_validation as _dv
+        if _dv.is_daily(timestep):
+            kw = dict(skip_leap_dec31=skip_leap_dec31,
+                      chunk_mismatch_ranges=list(chunk_mismatch_ranges or ()))
+            internal = _dv.find_missing_ranges(idx, **kw)
+            unexplained = sum(r["days"] for r in internal
+                              if r["reason"] != _dv.CLIENT_CALENDAR)
+            out["days_missing_internal"] = int(sum(r["days"] for r in internal))
+            out["missing_ranges"] = _dv.find_missing_ranges(
+                idx, min(req_start, actual_start), max(req_end, actual_end), **kw)
+            if unexplained > tolerance_days:
+                out["coverage_complete"] = False
     except Exception:
         pass                                              # never fail a fetch over this
     return out
@@ -977,6 +1011,13 @@ def _fetch_one(
         _upstream = dict(_a.pop("aihydro_upstream", {}) or {})
     except Exception:
         pass
+    # Daily-chunk validation record from a chunked backend (GridMET): which
+    # chunks were rejected and not merged.
+    _chunk_info: dict[str, Any] = {}
+    try:
+        _chunk_info = dict(data.attrs.pop("aihydro_chunk_validation", {}) or {})
+    except Exception:
+        pass
 
     # Harvest backend-attached caveats (e.g. "polygon mask failed") so
     # degradations surface on the result instead of dying in debug logs.
@@ -988,15 +1029,27 @@ def _fetch_one(
     if support_note:
         notes.insert(0, support_note)
 
-    cov = _temporal_coverage(data, start, end,
-                             timestep=getattr(spec, "timestep", "") or "")
+    cov = _temporal_coverage(
+        data, start, end, timestep=getattr(spec, "timestep", "") or "",
+        skip_leap_dec31=_skips_leap_dec31(spec),
+        chunk_mismatch_ranges=[(f["start"], f["end"])
+                               for f in _chunk_info.get("failures", [])],
+    )
     if not cov["coverage_complete"]:
         notes.append(
             f"COVERAGE INCOMPLETE: requested {start}..{end}, "
             f"{spec.id} served {cov['coverage_start']}..{cov['coverage_end']} "
             f"({cov['days_missing_head']}d missing at start, "
-            f"{cov['days_missing_tail']}d at end). Aggregations over this series "
-            f"describe only the days present; absent days are not zeros."
+            f"{cov['days_missing_tail']}d at end, "
+            f"{cov['days_missing_internal']}d inside the served span). "
+            f"Aggregations over this series describe only the days present; "
+            f"absent days are not zeros. See missing_ranges for reasons."
+        )
+    elif cov["days_missing_internal"]:
+        notes.append(
+            f"{cov['days_missing_internal']} day(s) inside the served span are absent "
+            f"(see missing_ranges; client_calendar_assumption = the client library "
+            f"never requested them, unverified whether the source lacks them)."
         )
 
     # Unit the payload itself declared (backend-reported), else the spec's.

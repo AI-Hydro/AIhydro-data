@@ -120,6 +120,8 @@ def _result_to_dict(result: Any) -> dict[str, Any]:
         "coverage_complete": getattr(result, "coverage_complete", None),
         "days_missing_head": getattr(result, "days_missing_head", None),
         "days_missing_tail": getattr(result, "days_missing_tail", None),
+        "days_missing_internal": getattr(result, "days_missing_internal", None),
+        "missing_ranges": getattr(result, "missing_ranges", None),
         "fallback_history": getattr(result, "fallback_history", []),
         "cache_hit": result.cache_hit,
         "cache_key": result.cache_key,

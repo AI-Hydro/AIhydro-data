@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-22 — 0.2.5 daily gridded output validation (Science Wave 3, PR-2)
+
+- Per-year GridMET fetch with chunk validation, one private-cache retry, no silent merge; reason-coded
+  `missing_ranges` and `days_missing_internal`; cache revision bump for precipitation/tmax/tmin/pet.
+- Offline tests in `tests/test_gridmet_daily_validation.py` (synthetic pygridmet). No live retrieval; nothing
+  under `~/.aihydro` modified; upstream issue drafted, not filed.
+
 ## 2026-09-29 — Cache policy and outlet identity for publication pilots
 
 - Manual strict pins now check the cached serving product against the current
