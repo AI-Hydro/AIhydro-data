@@ -234,6 +234,11 @@ class FetchResult(BaseModel):
     coverage_complete: bool = True
     days_missing_head: int = 0
     days_missing_tail: int = 0
+    # Daily products only: days absent INSIDE the served span, and every absent
+    # day over the requested window as run-compressed ranges, each with a reason
+    # code: client_calendar_assumption | absent_in_response | chunk_mismatch.
+    days_missing_internal: int = 0
+    missing_ranges: list[dict[str, Any]] = Field(default_factory=list)
     coverage_tolerance_days: int = 1
 
     # Observation provenance (Wave U). Empty for products that carry none.

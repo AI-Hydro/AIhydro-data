@@ -178,8 +178,8 @@ def cache_read(
         log.warning("Cache read failed for %s: %s — treating as miss.", ck, exc)
         return None
 
-    from aihydro_data.contracts import FetchResult
     from aihydro_data.contracts import FetchRequest as FR
+    from aihydro_data.contracts import FetchResult
 
     # Reconstruct a minimal FetchRequest for the result (may not match exactly)
     _req = req or FR(
@@ -195,6 +195,7 @@ def cache_read(
     # remains unknown rather than being invented from today's ProductSpec.
     _units = _timestep = ""
     _units_spec = _units_declared = ""
+    _spec = None
     _res_m = None
     _pitfalls: list[str] = []
     try:
@@ -218,8 +219,12 @@ def cache_read(
     # Coverage is a property of the restored data against the requested window,
     # so recompute it rather than trusting anything stored.
     try:
-        from aihydro_data._pipeline import _temporal_coverage
-        _cov = _temporal_coverage(data, _req.start, _req.end, timestep=_timestep)
+        from aihydro_data._pipeline import _skips_leap_dec31, _temporal_coverage
+        _cov = _temporal_coverage(
+            data, _req.start, _req.end, timestep=_timestep,
+            skip_leap_dec31=_skips_leap_dec31(_spec) if _spec is not None else False,
+            reason_hints=getattr(manifest, "missing_ranges", None) or (),
+        )
     except Exception:
         _cov = {}
 
@@ -266,7 +271,19 @@ def cache_write(result: "FetchResult", geom_wkt: str = "", geom_id: str = "") ->
     the cached data file, or None when nothing was cached. An entry whose hash
     cannot be computed is NOT kept (it could not be verified on read).
     """
+    # A dropped chunk (chunk_mismatch) or a gap that persisted after the private-cache
+    # retry (absent_after_retry) is a transient upstream fault, not a
+    # property of the request: caching it would turn one bad download into a
+    # permanent gap. Gaps that are only a client calendar assumption are
+    # deterministic for the product and may be cached.
+    from aihydro_data._daily_validation import NO_CACHE_REASONS
     from aihydro_data.cache.manifest import ManifestEntry, write_manifest
+    if any(r.get("reason") in NO_CACHE_REASONS
+           for r in (getattr(result, "missing_ranges", None) or [])):
+        log.warning("Not caching %s: result carries gaps from a dropped chunk "
+                    "(chunk_mismatch) or that persisted after a retry "
+                    "(absent_after_retry).", result.cache_key or result.variable)
+        return None
 
     d = cache_dir()
     ck = result.cache_key or cache_key({
@@ -371,6 +388,7 @@ def cache_write(result: "FetchResult", geom_wkt: str = "", geom_id: str = "") ->
         quality=dict(getattr(result, "quality", {}) or {}),
         upstream=dict(getattr(result, "upstream", {}) or {}),
         data_sha256=sha,
+        missing_ranges=[dict(r) for r in (getattr(result, "missing_ranges", None) or [])],
     )
     try:
         write_manifest(d, entry)

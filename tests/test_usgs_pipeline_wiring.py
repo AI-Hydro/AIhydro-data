@@ -224,6 +224,19 @@ def test_transport_failure_may_fall_through_and_is_recorded(monkeypatch):
 
 
 # ---------------------------------------------------------------- D3 legacy switch
+def _install_nwis_stub(monkeypatch, stub):
+    """Make `import dataretrieval.nwis as nwis` resolve to `stub`.
+
+    `import a.b as c` reads the `nwis` attribute of the already-imported real
+    package before it consults sys.modules, so replacing only the sys.modules
+    entry is not enough once dataretrieval >= 1.4 (which imports nwis eagerly)
+    is installed. The legacy path needs the package (extra `legacy-usgs`), so
+    these tests are skipped, scoped to them alone, where it is absent."""
+    pkg = pytest.importorskip("dataretrieval", reason="legacy-usgs extra not installed")
+    monkeypatch.setitem(sys.modules, "dataretrieval.nwis", stub)
+    monkeypatch.setattr(pkg, "nwis", stub, raising=False)
+
+
 def test_legacy_switch_uses_dataretrieval_and_records_it(monkeypatch):
     called = []
     monkeypatch.setattr(uw, "_http_get", Replay())           # gauge resolution only
@@ -233,7 +246,7 @@ def test_legacy_switch_uses_dataretrieval_and_records_it(monkeypatch):
         called.append(kw)
         return pd.DataFrame({"00060_Mean": [10.0, 20.0, 30.0], "00060_Mean_cd": ["A", "A e", "P"]}, index=idx), None
     stub.get_dv = get_dv
-    monkeypatch.setitem(sys.modules, "dataretrieval.nwis", stub)
+    _install_nwis_stub(monkeypatch, stub)
     monkeypatch.setenv("AIHYDRO_USGS_BACKEND", "legacy_waterservices")
     monkeypatch.setattr(uw, "get_daily", lambda *a, **k: (_ for _ in ()).throw(AssertionError("adapter data path used")))
     r = pipeline.fetch("streamflow", SITE, "2020-01-01", "2020-01-03", cache=False)
@@ -247,7 +260,7 @@ def test_legacy_switch_unknown_codes_are_refused(monkeypatch):
     stub = types.ModuleType("dataretrieval.nwis")
     idx = pd.date_range("2020-01-01", periods=1, tz="UTC", name="datetime")
     stub.get_dv = lambda **kw: (pd.DataFrame({"00060_Mean": [1.0], "00060_Mean_cd": ["A R"]}, index=idx), None)
-    monkeypatch.setitem(sys.modules, "dataretrieval.nwis", stub)
+    _install_nwis_stub(monkeypatch, stub)
     monkeypatch.setenv("AIHYDRO_USGS_BACKEND", "legacy_waterservices")
     with pytest.raises(TerminalSourceError) as ei:
         pipeline.fetch("streamflow", SITE, "2020-01-01", "2020-01-01", cache=False)
@@ -324,7 +337,7 @@ def test_cache_key_depends_on_the_usgs_backend(replay, monkeypatch):
     stub = types.ModuleType("dataretrieval.nwis")
     idx = pd.date_range("1989-10-01", periods=2, tz="UTC", name="datetime")
     stub.get_dv = lambda **kw: (pd.DataFrame({"00060_Mean": [1.0, 2.0], "00060_Mean_cd": ["A", "A"]}, index=idx), None)
-    monkeypatch.setitem(sys.modules, "dataretrieval.nwis", stub)
+    _install_nwis_stub(monkeypatch, stub)
     k2 = pipeline.fetch("streamflow", SITE, *FULL, cache=False).cache_key
     assert k1 != k2
 
@@ -347,7 +360,7 @@ def test_legacy_path_refuses_sentinel_and_non_finite(monkeypatch, val):
     stub = types.ModuleType("dataretrieval.nwis")
     idx = pd.date_range("2020-01-01", periods=2, tz="UTC", name="datetime")
     stub.get_dv = lambda **kw: (pd.DataFrame({"00060_Mean": [1.0, val], "00060_Mean_cd": ["A", "A"]}, index=idx), None)
-    monkeypatch.setitem(sys.modules, "dataretrieval.nwis", stub)
+    _install_nwis_stub(monkeypatch, stub)
     monkeypatch.setenv("AIHYDRO_USGS_BACKEND", "legacy_waterservices")
     with pytest.raises(TerminalSourceError) as ei:
         pipeline.fetch("streamflow", SITE, "2020-01-01", "2020-01-02", cache=False)
@@ -359,7 +372,7 @@ def test_legacy_path_keeps_genuine_missing_and_flags_negatives(monkeypatch):
     stub = types.ModuleType("dataretrieval.nwis")
     idx = pd.date_range("2020-01-01", periods=3, tz="UTC", name="datetime")
     stub.get_dv = lambda **kw: (pd.DataFrame({"00060_Mean": [1.0, float("nan"), -2.0], "00060_Mean_cd": ["A", "A", "A"]}, index=idx), None)
-    monkeypatch.setitem(sys.modules, "dataretrieval.nwis", stub)
+    _install_nwis_stub(monkeypatch, stub)
     monkeypatch.setenv("AIHYDRO_USGS_BACKEND", "legacy_waterservices")
     r = pipeline.fetch("streamflow", SITE, "2020-01-01", "2020-01-03", cache=False)
     assert len(r.data) == 2 and r.quality["n_null_values"] == 1 and r.quality["n_negative"] == 1
@@ -466,9 +479,9 @@ def test_outlet_cache_key_is_rounded_to_1e_minus_7(monkeypatch):
     assert a == b and a != c
 
 
-def test_version_is_0_2_4():
+def test_version_is_0_2_5():
     from aihydro_data._version import __version__
-    assert __version__ == "0.2.4"
+    assert __version__ == "0.2.5"
 
 
 # ---------------------------------------------------------------- final polish

@@ -33,8 +33,9 @@ jobs:
       - name: Install package with dev + viz extras
         run: |
           python -m pip install --upgrade pip
-          # Need [viz] so the 24 viz tests can import matplotlib + folium.
-          pip install -e ".[dev,viz,gee]"
+          # [viz]: matplotlib + folium for the viz tests. [opendap]: netCDF4 for the CHIRPS_IRI
+          # fill-value tests. [legacy-usgs]: dataretrieval for the D3 legacy-switch tests.
+          pip install -e ".[dev,viz,gee,opendap,legacy-usgs]"
 
       - name: Lint with ruff (advisory while existing lint debt is resolved)
         continue-on-error: true

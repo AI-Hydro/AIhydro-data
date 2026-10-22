@@ -3,6 +3,45 @@
 All notable changes to `aihydro-data` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.5] — 2026-10-22
+
+Science Wave 3 (PR-2). A GridMET precipitation fetch for 01031500 (WY1990-2009) came back with 6,935 of 7,305
+days: pygridmet's shared on-disk cache held 2006 data under the 1999 request's name and `xr.merge` silently
+dropped 1999. Evidence (byte-identical files, sha256, URL-to-hash reproduction, 370-day accounting):
+`docs/vision-2040/evidence/gridmet-chunk-defect-1/` in the AI-Hydro workspace.
+
+### Added
+
+- `aihydro_data._daily_validation`: source-agnostic checks for daily series (duplicate timestamps, every
+  requested year present, no internal gaps, each chunk's time coordinate inside its own request). Reusable by Daymet.
+- GridMET (`pygridmet`) is fetched per calendar year and every chunk is validated. A failing chunk is retried
+  once with a fresh private cache directory (`HYRIVER_CACHE_NAME`, serialised under a process lock) and, if it
+  still fails, is NOT merged: it is dropped, a note says so, and coverage is reported incomplete.
+- `FetchResult.days_missing_internal` and `FetchResult.missing_ranges` (run-compressed, over the requested window)
+  for daily products, each range with a reason: `client_calendar_assumption` (pygridmet never requests Dec 31 of
+  leap years; whether GridMET lacks it is UNVERIFIED, so it is disclosed, not called missing in GridMET),
+  `chunk_mismatch`, `absent_in_response`. Also exposed by the MCP fetch summary.
+
+### Changed
+
+- Per-chunk rule for GridMET: a chunk must hold every expected day (requested days minus leap-year Dec 31).
+  A short, empty, wrong-range, duplicated or erroring chunk is re-fetched once with a private cache; if still bad
+  it is dropped (`chunk_mismatch`). A chunk with days missing inside it is kept and the days are disclosed as
+  `absent_after_retry`. A tail shortfall in the final chunk is the archive extent only when the request ends within 14 days of
+  today and the shortfall is at most 14 days (engineering constant); otherwise it is truncation. A chunk that is only a
+  leap-year Dec 31 is skipped. Daymet calls in `hyriver.py` now run under the same lock as GridMET.
+- A result that carries an unrecovered dropped chunk (`chunk_mismatch`) or a gap that persisted after the retry
+  (`absent_after_retry`) is never written to the content-addressed
+  cache, so one bad download cannot become a permanent gap. Results whose only gaps are
+  `client_calendar_assumption` are still cached.
+- The cache manifest persists `missing_ranges` with their reason codes; a restore keeps the stored reasons.
+- CI installs the `opendap` and `legacy-usgs` extras (the 10 offline failures on main were missing `netCDF4` and
+  `dataretrieval`); the legacy NWIS test stubs now also replace `dataretrieval.nwis` on the package.
+- `coverage_complete` is False for a daily product when more than `coverage_tolerance_days` days are absent
+  inside the served span, except days that are only a `client_calendar_assumption`.
+- `_VARIABLE_CACHE_REVISION` gains `precipitation`, `tmax`, `tmin`, `pet` (revision 1): entries cached before
+  this release (possibly cross-wired) no longer match and are re-fetched. Existing cache files are not deleted.
+
 ## [0.2.4] — 2026-10-17
 
 Wave U patch (proof 3, finding E6). The Water Data API body carries a per-response top-level `timeStamp`
