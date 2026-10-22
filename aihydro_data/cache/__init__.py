@@ -271,16 +271,18 @@ def cache_write(result: "FetchResult", geom_wkt: str = "", geom_id: str = "") ->
     the cached data file, or None when nothing was cached. An entry whose hash
     cannot be computed is NOT kept (it could not be verified on read).
     """
-    from aihydro_data.cache.manifest import ManifestEntry, write_manifest
-
-    # A dropped chunk (reason chunk_mismatch) is a transient upstream fault, not a
+    # A dropped chunk (chunk_mismatch) or a gap that persisted after the private-cache
+    # retry (absent_after_retry) is a transient upstream fault, not a
     # property of the request: caching it would turn one bad download into a
     # permanent gap. Gaps that are only a client calendar assumption are
     # deterministic for the product and may be cached.
-    if any(r.get("reason") == "chunk_mismatch"
+    from aihydro_data._daily_validation import NO_CACHE_REASONS
+    from aihydro_data.cache.manifest import ManifestEntry, write_manifest
+    if any(r.get("reason") in NO_CACHE_REASONS
            for r in (getattr(result, "missing_ranges", None) or [])):
-        log.warning("Not caching %s: result carries chunk_mismatch gaps (unrecovered "
-                    "dropped chunk).", result.cache_key or result.variable)
+        log.warning("Not caching %s: result carries gaps from a dropped chunk "
+                    "(chunk_mismatch) or that persisted after a retry "
+                    "(absent_after_retry).", result.cache_key or result.variable)
         return None
 
     d = cache_dir()

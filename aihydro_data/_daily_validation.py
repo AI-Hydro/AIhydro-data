@@ -16,6 +16,11 @@ Reason codes carried by ``missing_ranges``:
 ``chunk_mismatch``              a chunk was rejected (wrong time range or
     duplicate) and not merged; its days are absent from the result.
 ``absent_in_response``          the day is simply not in the returned series.
+``absent_after_retry``          a chunk with internal gaps was re-fetched once with
+    a fresh private cache and the days were still absent. The chunk is kept and
+    the days disclosed; the result is NOT cached (the gap may be transient).
+
+Reasons in ``NO_CACHE_REASONS`` keep a result out of the content-addressed cache.
 """
 from __future__ import annotations
 
@@ -26,6 +31,8 @@ import pandas as pd
 CLIENT_CALENDAR = "client_calendar_assumption"
 CHUNK_MISMATCH = "chunk_mismatch"
 ABSENT = "absent_in_response"
+ABSENT_AFTER_RETRY = "absent_after_retry"
+NO_CACHE_REASONS = frozenset({CHUNK_MISMATCH, ABSENT_AFTER_RETRY})
 
 DAILY_TIMESTEPS = frozenset({"daily", "1d", "day", "1-day"})
 
@@ -163,10 +170,82 @@ def validate_daily_series(
             "missing_ranges": ranges}
 
 
-def year_chunks(start: str, end: str) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
-    """Split [start, end] at calendar-year boundaries."""
+def year_chunks(start: str, end: str, *, skip_leap_dec31: bool = False
+                ) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """Split [start, end] at calendar-year boundaries.
+
+    With ``skip_leap_dec31`` a chunk that is only a leap-year Dec 31 is dropped:
+    the client library would request nothing for it (pygridmet returns ``[]``).
+    Those days surface as ``client_calendar_assumption`` in ``missing_ranges``.
+    """
     s, e = pd.Timestamp(start), pd.Timestamp(end)
     out = []
     for y in range(s.year, e.year + 1):
-        out.append((max(s, pd.Timestamp(y, 1, 1)), min(e, pd.Timestamp(y, 12, 31))))
+        a, b = max(s, pd.Timestamp(y, 1, 1)), min(e, pd.Timestamp(y, 12, 31))
+        if skip_leap_dec31 and a == b and is_leap_dec31(a):
+            continue
+        out.append((a, b))
     return out
+
+
+def check_daily_chunk(
+    times: Any,
+    chunk_start: Any,
+    chunk_end: Any,
+    *,
+    is_last: bool = False,
+    skip_leap_dec31: bool = False,
+) -> dict[str, Any]:
+    """Classify one fetched chunk against its own request.
+
+    ``status``:
+      ``ok``     every expected day present (expected = requested days minus
+                 leap Dec 31 when ``skip_leap_dec31``).
+      ``gappy``  right range, no duplicates, but days missing INSIDE the served
+                 span; ``gaps`` lists them. Worth one retry; kept if they persist.
+      ``bad``    empty, outside its requested range, duplicate timestamps, or
+                 truncated (the first expected day, or the last one of a non-final
+                 chunk, is absent). Never merged if it persists.
+    A tail shortfall in the FINAL chunk is the archive's extent, not a defect:
+    it is left to the head/tail coverage fields.
+    """
+    lo, hi = pd.Timestamp(chunk_start).normalize(), pd.Timestamp(chunk_end).normalize()
+    idx = as_day_index(times)
+    if idx.empty:
+        return {"status": "bad", "problems": ["no time coordinates"], "gaps": []}
+    if idx.min() < lo or idx.max() > hi:
+        return {"status": "bad", "gaps": [], "problems": [
+            f"time {idx.min().date()}..{idx.max().date()} outside request {lo.date()}..{hi.date()}"]}
+    if idx.duplicated().any():
+        return {"status": "bad", "gaps": [],
+                "problems": [f"{int(idx.duplicated().sum())} duplicate timestamp(s)"]}
+    expected = pd.date_range(lo, hi, freq="D")
+    if skip_leap_dec31:
+        expected = expected[~((expected.month == 12) & (expected.day == 31)
+                              & expected.is_leap_year)]
+    if len(expected) == 0:
+        return {"status": "ok", "problems": [], "gaps": []}
+    missing = expected.difference(idx)
+    if len(missing) == 0:
+        return {"status": "ok", "problems": [], "gaps": []}
+    if idx.min() > expected[0]:
+        return {"status": "bad", "gaps": [], "problems": [
+            f"truncated: {len(idx)} of {len(expected)} expected days, first served {idx.min().date()}"]}
+    if idx.max() < expected[-1] and not is_last:
+        return {"status": "bad", "gaps": [], "problems": [
+            f"truncated: {len(idx)} of {len(expected)} expected days, last served {idx.max().date()}"]}
+    inner = missing[missing < idx.max()]
+    if len(inner) == 0:
+        return {"status": "ok", "problems": [], "gaps": []}
+    gaps = _runs(list(inner), [ABSENT] * len(inner))
+    return {"status": "gappy", "gaps": gaps,
+            "problems": [f"{len(inner)} internal day(s) absent"]}
+
+
+def chunk_hints(chunk_info: dict[str, Any]) -> tuple[list[tuple[str, str]], list[dict[str, Any]]]:
+    """From a backend's ``aihydro_chunk_validation`` record: day ranges of chunks
+    that were dropped (``chunk_mismatch``) and per-range reason hints for gaps in
+    chunks that were kept (``absent_after_retry``)."""
+    dropped = [(f["start"], f["end"]) for f in chunk_info.get("failures", [])]
+    hints = [dict(g) for g in chunk_info.get("retained_gaps", [])]
+    return dropped, hints

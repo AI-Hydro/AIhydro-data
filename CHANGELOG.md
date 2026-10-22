@@ -24,7 +24,13 @@ dropped 1999. Evidence (byte-identical files, sha256, URL-to-hash reproduction, 
 
 ### Changed
 
-- A result that carries an unrecovered dropped chunk (`chunk_mismatch`) is never written to the content-addressed
+- Per-chunk rule for GridMET: a chunk must hold every expected day (requested days minus leap-year Dec 31).
+  A short, empty, wrong-range, duplicated or erroring chunk is re-fetched once with a private cache; if still bad
+  it is dropped (`chunk_mismatch`). A chunk with days missing inside it is kept and the days are disclosed as
+  `absent_after_retry`. A tail shortfall in the final chunk is the archive extent. A chunk that is only a
+  leap-year Dec 31 is skipped. Daymet calls in `hyriver.py` now run under the same lock as GridMET.
+- A result that carries an unrecovered dropped chunk (`chunk_mismatch`) or a gap that persisted after the retry
+  (`absent_after_retry`) is never written to the content-addressed
   cache, so one bad download cannot become a permanent gap. Results whose only gaps are
   `client_calendar_assumption` are still cached.
 - The cache manifest persists `missing_ranges` with their reason codes; a restore keeps the stored reasons.

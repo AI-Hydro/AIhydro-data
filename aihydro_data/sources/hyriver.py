@@ -146,6 +146,16 @@ _HYRIVER_ENV_LOCK = threading.RLock()
 _HYRIVER_CACHE_ENV = "HYRIVER_CACHE_NAME"
 
 
+def _under_hyriver_lock(fn: Any) -> Any:
+    """Run ``fn`` holding the process-wide HyRiver lock (used by the Daymet path:
+    fetch_batch runs backends in threads, and a GridMET retry changes the
+    process-global HYRIVER_CACHE_NAME while it holds this lock)."""
+    def run() -> Any:
+        with _HYRIVER_ENV_LOCK:
+            return fn()
+    return run
+
+
 @contextlib.contextmanager
 def _private_hyriver_cache():
     """Point HYRIVER_CACHE_NAME at a fresh temp dir; restore and delete after.
@@ -175,41 +185,73 @@ def _times_of(obj: Any) -> Any:
     return obj[_find_time_dim(obj)].values
 
 
+_RANK = {"ok": 0, "gappy": 1, "bad": 2}
+
+
 def _chunked_daily(fetch: Any, start: str, end: str, label: str
-                   ) -> tuple[Any, list[dict[str, Any]]]:
-    """Fetch ``[start, end]`` per calendar year, validate each chunk, retry a bad
-    one once with a private cache, drop it if it still fails. Returns
-    ``(merged, failures)``; raises if no chunk survives or the merge would
-    contain duplicate days."""
+                   ) -> tuple[Any, dict[str, Any]]:
+    """Fetch ``[start, end]`` per calendar year and validate each chunk.
+
+    Rule per chunk (``dv.check_daily_chunk``):
+      * ``ok``: merged.
+      * anything else, or an exception from the fetch: re-fetched ONCE with a
+        fresh private cache directory, and the better of the two attempts is used.
+      * still ``gappy`` (right range, days missing inside it): KEPT, the gap days
+        are disclosed with reason ``absent_after_retry`` and the result is never
+        cached (the gap may be transient).
+      * still ``bad`` (empty, wrong range, duplicates, truncated, or the fetch
+        raised twice): DROPPED, never merged, recorded with reason
+        ``chunk_mismatch`` (also not cached).
+    Leap-year Dec 31 is never expected (pygridmet does not request it); a chunk
+    that is only that day is skipped. Returns ``(merged, info)`` with
+    ``info = {"failures": [...], "retained_gaps": [...]}``; raises if no chunk
+    survives or the merge would contain duplicate days.
+    """
     import pandas as pd
     import xarray as xr
 
     from aihydro_data import _daily_validation as dv
+    from aihydro_data.exceptions import AihydroDataError
+
+    chunks = dv.year_chunks(start, end, skip_leap_dec31=True)
+    if not chunks:
+        raise ValueError(f"{label}: {start}..{end} contains no day the client requests "
+                         f"(leap-year Dec 31 only).")
+
+    def attempt(cs: Any, ce: Any, is_last: bool) -> tuple[Any, dict[str, Any]]:
+        try:
+            chunk = fetch(str(cs.date()), str(ce.date()))
+            return chunk, dv.check_daily_chunk(
+                _times_of(chunk), cs, ce, is_last=is_last, skip_leap_dec31=True)
+        except AihydroDataError:
+            raise                                   # terminal/structured: not a cache problem
+        except Exception as exc:                    # noqa: BLE001 - recorded, not hidden
+            return None, {"status": "bad", "gaps": [],
+                          "problems": [f"fetch error: {type(exc).__name__}: {exc}"]}
 
     parts: list[Any] = []
     failures: list[dict[str, Any]] = []
-    for cs, ce in dv.year_chunks(start, end):
-        def _ok(chunk: Any) -> dict[str, Any]:
-            return dv.validate_daily_series(
-                _times_of(chunk), str(cs.date()), str(ce.date()),
-                chunks=[(cs, ce, _times_of(chunk))], skip_leap_dec31=True)
-
+    retained: list[dict[str, Any]] = []
+    for i, (cs, ce) in enumerate(chunks):
+        is_last = i == len(chunks) - 1
         with _HYRIVER_ENV_LOCK:
-            chunk = fetch(str(cs.date()), str(ce.date()))
-            verdict = _ok(chunk)
-            if not verdict["ok"]:
+            chunk, verdict = attempt(cs, ce, is_last)
+            if verdict["status"] != "ok":
                 log.warning("%s chunk %s..%s failed validation (%s); retrying once "
                             "with a private cache", label, cs.date(), ce.date(),
                             "; ".join(verdict["problems"]))
                 with _private_hyriver_cache():
-                    chunk = fetch(str(cs.date()), str(ce.date()))
-                verdict = _ok(chunk)
-        if verdict["ok"]:
-            parts.append(chunk)
-        else:
+                    chunk2, verdict2 = attempt(cs, ce, is_last)
+                if _RANK[verdict2["status"]] <= _RANK[verdict["status"]]:
+                    chunk, verdict = chunk2, verdict2
+        if verdict["status"] == "bad":
             failures.append({"start": str(cs.date()), "end": str(ce.date()),
                              "reason": dv.CHUNK_MISMATCH,
                              "problems": verdict["problems"], "retried": True})
+            continue
+        parts.append(chunk)
+        for g in verdict["gaps"]:
+            retained.append({**g, "reason": dv.ABSENT_AFTER_RETRY})
 
     if not parts:
         raise RuntimeError(
@@ -226,18 +268,27 @@ def _chunked_daily(fetch: Any, start: str, end: str, label: str
     if final["duplicates"]:
         raise RuntimeError(f"{label}: merged series has {final['duplicates']} duplicate "
                            f"timestamp(s); refusing to return it.")
-    return merged, failures
+    return merged, {"failures": failures, "retained_gaps": retained}
 
 
-def _attach_chunk_failures(out: Any, failures: list[dict[str, Any]]) -> Any:
+def _attach_chunk_failures(out: Any, info: dict[str, Any]) -> Any:
+    failures, retained = info.get("failures", []), info.get("retained_gaps", [])
+    if not (failures or retained):
+        return out
+    out.attrs["aihydro_chunk_validation"] = {"failures": failures, "retained_gaps": retained}
+    notes = list(out.attrs.get("aihydro_notes", []))
     if failures:
-        out.attrs["aihydro_chunk_validation"] = {"failures": failures}
-        out.attrs["aihydro_notes"] = list(out.attrs.get("aihydro_notes", [])) + [
+        notes.append(
             "GridMET yearly chunk(s) failed validation and were NOT merged: "
             + "; ".join(f"{f['start']}..{f['end']} ({'; '.join(f['problems'])})"
                         for f in failures)
-            + ". See missing_ranges (reason chunk_mismatch)."
-        ]
+            + ". See missing_ranges (reason chunk_mismatch). Not cached.")
+    if retained:
+        notes.append(
+            f"{sum(g['days'] for g in retained)} day(s) were still absent after a retry with a "
+            "private cache and are disclosed in missing_ranges (reason absent_after_retry). "
+            "Not cached.")
+    out.attrs["aihydro_notes"] = notes
     return out
 
 
@@ -359,7 +410,7 @@ class Backend(SourceBackend):
 
         from aihydro_data.sources._retry import call_with_retry
         var_key = cfg["pygridmet_variable"]
-        _failures: list[dict[str, Any]] = []
+        _failures: dict[str, Any] = {}
 
         if aggregation == "centroid":
             # Point-mode fetch: extract at geometry centroid
@@ -456,16 +507,17 @@ class Backend(SourceBackend):
             c = geometry.centroid
             coords = (c.x, c.y)   # pydaymet uses (lon, lat)
             df = call_with_retry(
-                lambda: pydaymet.get_bycoords(coords, dates=(start, end), variables=[var_key]),
+                _under_hyriver_lock(
+                    lambda: pydaymet.get_bycoords(coords, dates=(start, end), variables=[var_key])),
                 label="pydaymet.get_bycoords",
             )
         else:
             import geopandas as gpd
             gdf = gpd.GeoDataFrame(geometry=[geometry], crs="EPSG:4326")
             df = call_with_retry(
-                lambda: pydaymet.get_bygeom(
+                _under_hyriver_lock(lambda: pydaymet.get_bygeom(
                     gdf.geometry.iloc[0], dates=(start, end), variables=[var_key],
-                ),
+                )),
                 label="pydaymet.get_bygeom",
             )
             # get_bygeom returns an xarray.Dataset → reduce over spatial dims.

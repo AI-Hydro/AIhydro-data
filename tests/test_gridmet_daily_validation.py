@@ -42,23 +42,48 @@ def _year_ds(year: int, a: str, b: str, drop_leap_dec31: bool = True) -> xr.Data
 class FakeGridmet:
     """Stand-in for pygridmet. `poison` maps a requested year to the year whose
     data the SHARED cache returns; a private cache (HYRIVER_CACHE_NAME set) is
-    clean unless `poison_private` is also set."""
+    clean unless `poison_private` is also set.
 
-    def __init__(self, poison=None, poison_private=False, drop_leap_dec31=True):
+    `faults[year] = {"kind": "truncate"|"gap"|"raise", "arg": ..., "persistent": bool}`
+    injects a fault on the shared cache (and on the private one when persistent)."""
+
+    def __init__(self, poison=None, poison_private=False, drop_leap_dec31=True, faults=None):
         self.poison = poison or {}
         self.poison_private = poison_private
         self.drop = drop_leap_dec31
+        self.faults = faults or {}
         self.calls: list[tuple[str, str, bool]] = []
 
-    def get_bygeom(self, geom, dates, variables):
-        a, b = dates
+    def _chunk(self, a, b):
         private = bool(os.environ.get("HYRIVER_CACHE_NAME"))
         self.calls.append((a, b, private))
         y = pd.Timestamp(a).year
+        if pd.Timestamp(a) == pd.Timestamp(b) and pd.Timestamp(a).is_leap_year \
+                and pd.Timestamp(a).month == 12 and pd.Timestamp(a).day == 31:
+            return _year_ds(y, a, b, True).isel(time=slice(0, 0))      # real pygridmet: []
+        f = self.faults.get(y)
+        active = f and (f.get("persistent") or not private)
+        if active and f["kind"] == "raise":
+            raise ConnectionError("simulated THREDDS failure")
         if y in self.poison and (self.poison_private or not private):
             wy = self.poison[y]
             return _year_ds(wy, f"{wy}-01-01", f"{wy}-12-31", self.drop)
-        return _year_ds(y, a, b, self.drop)
+        ds = _year_ds(y, a, b, self.drop)
+        if active and f["kind"] == "truncate":
+            ds = ds.isel(time=slice(0, f["arg"]))
+        if active and f["kind"] == "gap":
+            keep = ~np.isin(ds["time"].values, pd.to_datetime(f["arg"]).values)
+            ds = ds.isel(time=np.where(keep)[0])
+        return ds
+
+    def get_bygeom(self, geom, dates, variables):
+        return self._chunk(*dates)
+
+    def get_bycoords(self, coords, dates, variables):
+        ds = self._chunk(*dates)
+        out = ds["pr"].mean(dim=["y", "x"]).to_series().to_frame("pr")
+        out.index.name = "time"
+        return out
 
 
 @pytest.fixture
@@ -69,14 +94,22 @@ def fake(monkeypatch):
     def install(client):
         mod = types.ModuleType("pygridmet")
         mod.get_bygeom = client.get_bygeom
+        mod.get_bycoords = client.get_bycoords
         monkeypatch.setitem(sys.modules, "pygridmet", mod)
         return client
     return install
 
 
-def _fetch(start="1998-01-01", end="2000-12-31"):
+def _fetch(start="1998-01-01", end="2000-12-31", aggregation="basin_mean"):
     return hyriver.Backend()._fetch_gridmet(SPEC, {"pygridmet_variable": "pr"}, GEOM,
-                                            start, end, "basin_mean")
+                                            start, end, aggregation)
+
+
+def _coverage(df, start, end):
+    """What the pipeline computes from the backend's attrs."""
+    dropped, hints = dv.chunk_hints(df.attrs.get("aihydro_chunk_validation", {}))
+    return _temporal_coverage(df, start, end, timestep="daily", skip_leap_dec31=True,
+                              chunk_mismatch_ranges=dropped, reason_hints=hints)
 
 
 def test_clean_fetch_passes_unchanged(fake):
@@ -226,3 +259,158 @@ def test_stored_reasons_take_precedence_over_rederivation():
         t, skip_leap_dec31=True,
         reason_hints=[{"start": "2000-12-31", "end": "2000-12-31", "reason": "absent_in_response"}])
     assert hinted[0]["reason"] == "absent_in_response"
+
+
+# ── review should-fixes: truncation, leap Dec 31 windows, gaps, exceptions ──
+
+def _never_cached(df, start, end, tmp_path):
+    from unittest.mock import patch
+
+    from aihydro_data.cache import cache_write
+    cov = _coverage(df, start, end)
+    res = _gridmet_result([], cov["missing_ranges"])
+    with patch("aihydro_data.cache.cache_dir", return_value=tmp_path):
+        return cache_write(res) is None and list(tmp_path.iterdir()) == []
+
+
+def test_truncated_chunk_is_retried_and_healed(fake):
+    client = fake(FakeGridmet(faults={2005: {"kind": "truncate", "arg": 180}}))
+    df = _fetch("2004-01-01", "2006-12-31")
+    assert (df["date"].dt.year == 2005).sum() == 365
+    assert [c[2] for c in client.calls if c[0].startswith("2005")] == [False, True]
+    assert "aihydro_chunk_validation" not in df.attrs
+
+
+def test_persistently_truncated_chunk_is_dropped_and_not_cached(fake, tmp_path):
+    fake(FakeGridmet(faults={2005: {"kind": "truncate", "arg": 180, "persistent": True}}))
+    df = _fetch("2004-01-01", "2006-12-31")
+    assert (df["date"].dt.year == 2005).sum() == 0
+    f = df.attrs["aihydro_chunk_validation"]["failures"]
+    assert f[0]["reason"] == "chunk_mismatch" and "truncated" in f[0]["problems"][0]
+    cov = _coverage(df, "2004-01-01", "2006-12-31")
+    assert cov["coverage_complete"] is False
+    assert {r["reason"] for r in cov["missing_ranges"]} >= {"chunk_mismatch"}
+    assert _never_cached(df, "2004-01-01", "2006-12-31", tmp_path)
+
+
+def test_tail_shortfall_of_the_final_chunk_is_archive_extent_not_a_drop(fake):
+    client = fake(FakeGridmet(faults={2006: {"kind": "truncate", "arg": 300, "persistent": True}}))
+    df = _fetch("2005-01-01", "2006-12-31")
+    assert (df["date"].dt.year == 2006).sum() == 300         # kept
+    assert all(c[2] is False for c in client.calls)          # no retry for an archive edge
+    cov = _coverage(df, "2005-01-01", "2006-12-31")
+    assert cov["days_missing_tail"] == 65 and cov["coverage_complete"] is False
+
+
+def test_window_starting_on_leap_dec31_skips_the_empty_chunk(fake):
+    client = fake(FakeGridmet())
+    df = _fetch("2000-12-31", "2001-03-31")
+    assert ("2000-12-31", "2000-12-31", False) not in client.calls
+    assert "aihydro_chunk_validation" not in df.attrs
+    assert df["date"].min() == pd.Timestamp("2001-01-01")
+    cov = _coverage(df, "2000-12-31", "2001-03-31")
+    assert cov["missing_ranges"] == [{"start": "2000-12-31", "end": "2000-12-31", "days": 1,
+                                      "reason": "client_calendar_assumption"}]
+    assert cov["coverage_complete"] is True
+
+
+def test_year_chunks_skip_only_the_leap_dec31_only_chunk():
+    assert dv.year_chunks("2000-12-31", "2000-12-31", skip_leap_dec31=True) == []
+    assert len(dv.year_chunks("2000-12-31", "2000-12-31")) == 1
+    assert len(dv.year_chunks("2001-12-31", "2001-12-31", skip_leap_dec31=True)) == 1
+
+
+def test_transient_internal_gap_heals_on_retry(fake):
+    fake(FakeGridmet(faults={2005: {"kind": "gap", "arg": ["2005-03-01", "2005-03-02"]}}))
+    df = _fetch("2004-06-01", "2006-06-30")
+    assert (df["date"].dt.year == 2005).sum() == 365
+    assert "aihydro_chunk_validation" not in df.attrs
+
+
+def test_persistent_gap_keeps_the_year_discloses_days_and_is_not_cached(fake, tmp_path):
+    fake(FakeGridmet(faults={2005: {"kind": "gap", "persistent": True,
+                                    "arg": ["2005-03-01", "2005-03-02", "2005-03-03", "2005-07-04"]}}))
+    df = _fetch("2004-06-01", "2006-06-30")
+    assert (df["date"].dt.year == 2005).sum() == 361                 # year kept, not dropped
+    info = df.attrs["aihydro_chunk_validation"]
+    assert info["failures"] == []
+    cov = _coverage(df, "2004-06-01", "2006-06-30")
+    gaps = [(r["start"], r["end"], r["days"]) for r in cov["missing_ranges"]
+            if r["reason"] == "absent_after_retry"]
+    assert gaps == [("2005-03-01", "2005-03-03", 3), ("2005-07-04", "2005-07-04", 1)]
+    assert cov["coverage_complete"] is False
+    assert any("absent_after_retry" in n for n in df.attrs["aihydro_notes"])
+    assert _never_cached(df, "2004-06-01", "2006-06-30", tmp_path)
+
+
+def test_exception_on_first_fetch_triggers_private_retry(fake):
+    client = fake(FakeGridmet(faults={1999: {"kind": "raise"}}))
+    df = _fetch()
+    assert (df["date"].dt.year == 1999).sum() == 365
+    assert [c[2] for c in client.calls if c[0].startswith("1999")] == [False, True]
+
+
+def test_exception_on_retry_records_one_year_and_keeps_the_rest(fake):
+    fake(FakeGridmet(faults={1999: {"kind": "raise", "persistent": True}}))
+    df = _fetch()
+    assert (df["date"].dt.year == 1999).sum() == 0
+    assert (df["date"].dt.year == 1998).sum() == 365 and (df["date"].dt.year == 2000).sum() == 365
+    f = df.attrs["aihydro_chunk_validation"]["failures"]
+    assert f[0]["reason"] == "chunk_mismatch" and "fetch error: ConnectionError" in f[0]["problems"][0]
+
+
+def test_all_chunks_failing_raises(fake):
+    fake(FakeGridmet(faults={1999: {"kind": "raise", "persistent": True}}))
+    with pytest.raises(RuntimeError, match="every yearly chunk failed"):
+        _fetch("1999-01-01", "1999-12-31")
+
+
+def test_centroid_path_validates_and_retries_too(fake):
+    client = fake(FakeGridmet(poison={1999: 2006}))
+    df = _fetch(aggregation="centroid")
+    assert (df["date"].dt.year == 1999).sum() == 365
+    assert [c[2] for c in client.calls if c[0].startswith("1999")] == [False, True]
+    assert not df["date"].duplicated().any()
+
+
+def test_centroid_path_persistent_fault_is_not_merged(fake):
+    fake(FakeGridmet(poison={1999: 2006}, poison_private=True))
+    df = _fetch(aggregation="centroid")
+    assert (df["date"].dt.year == 1999).sum() == 0
+    assert df.attrs["aihydro_chunk_validation"]["failures"][0]["reason"] == "chunk_mismatch"
+
+
+def test_daymet_calls_run_under_the_hyriver_lock(monkeypatch):
+    seen = []
+
+    def get_bygeom(geom, dates, variables):
+        seen.append(hyriver._HYRIVER_ENV_LOCK._is_owned())
+        return _year_ds(2001, "2001-01-01", "2001-01-10", False).rename({"pr": "prcp"})
+
+    mod = types.ModuleType("pydaymet")
+    mod.get_bygeom = get_bygeom
+    monkeypatch.setitem(sys.modules, "pydaymet", mod)
+    monkeypatch.setenv("AIHYDRO_DATA_NO_RETRY", "1")
+    hyriver.Backend()._fetch_daymet(SimpleNamespace(variable="precipitation"),
+                                    {"pydaymet_variable": "prcp"}, GEOM,
+                                    "2001-01-01", "2001-01-10", "basin_mean")
+    assert seen == [True]
+
+
+def test_cache_read_of_a_legacy_manifest_without_missing_ranges(tmp_path):
+    import json
+    from unittest.mock import patch
+
+    from aihydro_data.cache import cache_read, cache_write
+    rng = [{"start": "2000-12-31", "end": "2000-12-31", "days": 1,
+            "reason": "client_calendar_assumption"}]
+    res = _gridmet_result([pd.Timestamp("2000-12-31")], rng)
+    mf = tmp_path / "gridmetkey000000000000.manifest.json"
+    with patch("aihydro_data.cache.cache_dir", return_value=tmp_path):
+        assert cache_write(res)
+        entries = json.loads(mf.read_text())
+        for e in (entries if isinstance(entries, list) else [entries]):
+            e.pop("missing_ranges")                           # a pre-0.2.5 manifest
+        mf.write_text(json.dumps(entries))
+        back = cache_read("gridmetkey000000000000")
+    assert back is not None and back.missing_ranges == rng     # re-derived, same reason

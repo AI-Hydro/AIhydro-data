@@ -1031,11 +1031,13 @@ def _fetch_one(
     if support_note:
         notes.insert(0, support_note)
 
+    from aihydro_data._daily_validation import chunk_hints as _chunk_hints_of
+    _chunk_dropped, _chunk_hints = _chunk_hints_of(_chunk_info)
     cov = _temporal_coverage(
         data, start, end, timestep=getattr(spec, "timestep", "") or "",
         skip_leap_dec31=_skips_leap_dec31(spec),
-        chunk_mismatch_ranges=[(f["start"], f["end"])
-                               for f in _chunk_info.get("failures", [])],
+        chunk_mismatch_ranges=_chunk_dropped,
+        reason_hints=_chunk_hints,
     )
     if not cov["coverage_complete"]:
         notes.append(

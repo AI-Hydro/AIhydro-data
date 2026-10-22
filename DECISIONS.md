@@ -3,16 +3,28 @@
 ## 2026-10-22 — Validate daily gridded output; isolate the retry cache by lock, not subprocess
 
 pygridmet 0.19.4 merges per-year cache files without checking that each holds its own year. We validate output
-against the requested calendar (source-agnostic) and fetch GridMET per calendar year so each chunk can be checked.
-A bad chunk is retried once with a private `HYRIVER_CACHE_NAME` directory and never merged if it still fails. We
-do not reconstruct pygridmet's cache hashes to delete files. The env var is process-global in the MCP server, so
-GridMET calls run under one `RLock` and the variable is set/restored inside it. A subprocess was rejected: it
-re-imports the geospatial stack and pickles geometry for a rare path, and cannot be tested with an in-process
-client. Cost: GridMET fetches in one process are serialised. Leap-year Dec 31 days that pygridmet never requests
-are reported as `client_calendar_assumption` and do not by themselves make coverage incomplete (open question:
-whether GridMET really lacks them). Reviewer flag: that last choice is a judgement call (accepted by the lead). A result with a dropped
-`chunk_mismatch` chunk is not cached (transient fault); calendar-assumption-only gaps are cached with their reasons
-in the manifest.
+against the requested calendar (source-agnostic, `_daily_validation.py`) and fetch GridMET per calendar year so each
+chunk can be checked. We do not reconstruct pygridmet's cache hashes to delete files.
+
+Per-chunk rule: a chunk is accepted when every expected day is present (requested days minus leap-year Dec 31,
+which pygridmet never requests). Anything else, or an exception from the fetch, triggers exactly one re-fetch with a
+fresh private `HYRIVER_CACHE_NAME` directory; the better of the two attempts is used. If it is still wrong
+(empty, outside its range, duplicate timestamps, truncated, or the fetch raised twice) the chunk is dropped and
+never merged, reason `chunk_mismatch`. If it has the right range but days missing inside it, it is kept and the
+days are disclosed with reason `absent_after_retry`. A tail shortfall in the final chunk is treated as the
+archive's extent (reported by the head/tail coverage fields), not as a defect. A one-day chunk that is a leap-year
+Dec 31 is skipped (pygridmet returns `[]` for it). Results carrying `chunk_mismatch` or `absent_after_retry` are
+never written to the content-addressed cache because the fault may be transient; `missing_ranges` with reasons are
+stored in the manifest of results that are cached.
+
+Leap-year Dec 31 days that pygridmet never requests are reported as `client_calendar_assumption` and do not by
+themselves make `coverage_complete` False, because whether GridMET lacks them is unverified (OQ2).
+
+The env var is process-global in the MCP server, so GridMET calls and the Daymet calls in `hyriver.py` run under
+one `RLock`, and the variable is set and restored inside it. A subprocess was rejected: it re-imports the
+geospatial stack and pickles the geometry for a rare path, and cannot be tested with an in-process client. Cost:
+HyRiver fetches in one process run one at a time. Known gap: camels-attrs calls pygridmet and pydaymet outside this
+lock and does not validate; that is a camels-attrs follow-up.
 
 ## 2026-10-02 — Cache key uses the canonical geometry id, not WKT
 
