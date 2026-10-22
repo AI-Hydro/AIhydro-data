@@ -293,13 +293,38 @@ def test_persistently_truncated_chunk_is_dropped_and_not_cached(fake, tmp_path):
     assert _never_cached(df, "2004-01-01", "2006-12-31", tmp_path)
 
 
-def test_tail_shortfall_of_the_final_chunk_is_archive_extent_not_a_drop(fake):
+def test_tail_shortfall_near_today_is_archive_extent_not_a_drop(fake, monkeypatch):
+    monkeypatch.setattr(dv, "_today", lambda: pd.Timestamp("2007-01-05"))   # 5 days after the request end
     client = fake(FakeGridmet(faults={2006: {"kind": "truncate", "arg": 300, "persistent": True}}))
     df = _fetch("2005-01-01", "2006-12-31")
     assert (df["date"].dt.year == 2006).sum() == 300         # kept
     assert all(c[2] is False for c in client.calls)          # no retry for an archive edge
     cov = _coverage(df, "2005-01-01", "2006-12-31")
     assert cov["days_missing_tail"] == 65 and cov["coverage_complete"] is False
+
+
+def test_historical_final_chunk_truncation_is_retried_dropped_and_not_cached(fake, monkeypatch, tmp_path):
+    monkeypatch.setattr(dv, "_today", lambda: pd.Timestamp("2026-10-22"))
+    client = fake(FakeGridmet(faults={2006: {"kind": "truncate", "arg": 300, "persistent": True}}))
+    df = _fetch("2005-01-01", "2006-12-31")
+    assert (df["date"].dt.year == 2006).sum() == 0
+    assert [c[2] for c in client.calls if c[0].startswith("2006")] == [False, True]
+    assert df.attrs["aihydro_chunk_validation"]["failures"][0]["reason"] == "chunk_mismatch"
+    assert _never_cached(df, "2005-01-01", "2006-12-31", tmp_path)
+
+
+def test_historical_final_chunk_truncation_heals_on_retry(fake, monkeypatch):
+    monkeypatch.setattr(dv, "_today", lambda: pd.Timestamp("2026-10-22"))
+    fake(FakeGridmet(faults={2006: {"kind": "truncate", "arg": 300}}))
+    df = _fetch("2005-01-01", "2006-12-31")
+    assert (df["date"].dt.year == 2006).sum() == 365
+
+
+def test_recent_window_boundary_is_14_days():
+    assert dv.RECENT_PUBLICATION_DAYS == 14
+    now = dv._today()
+    assert dv.tail_may_be_archive_edge(now - pd.Timedelta(days=14))
+    assert not dv.tail_may_be_archive_edge(now - pd.Timedelta(days=15))
 
 
 def test_window_starting_on_leap_dec31_skips_the_empty_chunk(fake):

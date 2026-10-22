@@ -11,8 +11,11 @@ which pygridmet never requests). Anything else, or an exception from the fetch, 
 fresh private `HYRIVER_CACHE_NAME` directory; the better of the two attempts is used. If it is still wrong
 (empty, outside its range, duplicate timestamps, truncated, or the fetch raised twice) the chunk is dropped and
 never merged, reason `chunk_mismatch`. If it has the right range but days missing inside it, it is kept and the
-days are disclosed with reason `absent_after_retry`. A tail shortfall in the final chunk is treated as the
-archive's extent (reported by the head/tail coverage fields), not as a defect. A one-day chunk that is a leap-year
+days are disclosed with reason `absent_after_retry`. A tail shortfall is treated as the archive's extent
+(reported by the head/tail coverage fields, not a defect) only in the final chunk of a request whose end is within
+14 days of today (`RECENT_PUBLICATION_DAYS`, an engineering constant: GridMET publishes with a short lag). For any
+older request a short tail is truncation and follows the rule above, so a transient truncation of a historical
+window is neither merged silently nor cached. A one-day chunk that is a leap-year
 Dec 31 is skipped (pygridmet returns `[]` for it). Results carrying `chunk_mismatch` or `absent_after_retry` are
 never written to the content-addressed cache because the fault may be transient; `missing_ranges` with reasons are
 stored in the manifest of results that are cached.

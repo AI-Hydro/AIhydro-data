@@ -170,6 +170,22 @@ def validate_daily_series(
             "missing_ranges": ranges}
 
 
+# Engineering constant, not a measured property of GridMET: a daily product
+# publishes with a short lag, so a request ending within this many days of today
+# may legitimately lack its last days. Any older request that comes back short at
+# the tail is truncation (a transient fault), not the archive's extent.
+RECENT_PUBLICATION_DAYS = 14
+
+
+def _today() -> pd.Timestamp:
+    return pd.Timestamp.now(tz="UTC").tz_localize(None).normalize()
+
+
+def tail_may_be_archive_edge(requested_end: Any) -> bool:
+    """True when ``requested_end`` is within ``RECENT_PUBLICATION_DAYS`` of today."""
+    return (_today() - pd.Timestamp(requested_end).normalize()).days <= RECENT_PUBLICATION_DAYS
+
+
 def year_chunks(start: str, end: str, *, skip_leap_dec31: bool = False
                 ) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
     """Split [start, end] at calendar-year boundaries.
@@ -193,7 +209,7 @@ def check_daily_chunk(
     chunk_start: Any,
     chunk_end: Any,
     *,
-    is_last: bool = False,
+    tail_is_archive_edge: bool = False,
     skip_leap_dec31: bool = False,
 ) -> dict[str, Any]:
     """Classify one fetched chunk against its own request.
@@ -204,10 +220,11 @@ def check_daily_chunk(
       ``gappy``  right range, no duplicates, but days missing INSIDE the served
                  span; ``gaps`` lists them. Worth one retry; kept if they persist.
       ``bad``    empty, outside its requested range, duplicate timestamps, or
-                 truncated (the first expected day, or the last one of a non-final
-                 chunk, is absent). Never merged if it persists.
-    A tail shortfall in the FINAL chunk is the archive's extent, not a defect:
-    it is left to the head/tail coverage fields.
+                 truncated (the first expected day, or the last expected day, is
+                 absent). Never merged if it persists.
+    A tail shortfall is tolerated only when ``tail_is_archive_edge`` (see
+    ``tail_may_be_archive_edge``): then it is the archive's extent and is left to
+    the head/tail coverage fields.
     """
     lo, hi = pd.Timestamp(chunk_start).normalize(), pd.Timestamp(chunk_end).normalize()
     idx = as_day_index(times)
@@ -231,7 +248,7 @@ def check_daily_chunk(
     if idx.min() > expected[0]:
         return {"status": "bad", "gaps": [], "problems": [
             f"truncated: {len(idx)} of {len(expected)} expected days, first served {idx.min().date()}"]}
-    if idx.max() < expected[-1] and not is_last:
+    if idx.max() < expected[-1] and not tail_is_archive_edge:
         return {"status": "bad", "gaps": [], "problems": [
             f"truncated: {len(idx)} of {len(expected)} expected days, last served {idx.max().date()}"]}
     inner = missing[missing < idx.max()]

@@ -202,6 +202,8 @@ def _chunked_daily(fetch: Any, start: str, end: str, label: str
       * still ``bad`` (empty, wrong range, duplicates, truncated, or the fetch
         raised twice): DROPPED, never merged, recorded with reason
         ``chunk_mismatch`` (also not cached).
+    A tail shortfall is tolerated (archive extent) only in the final chunk of a request
+    ending within ``dv.RECENT_PUBLICATION_DAYS`` of today; elsewhere it is truncation.
     Leap-year Dec 31 is never expected (pygridmet does not request it); a chunk
     that is only that day is skipped. Returns ``(merged, info)`` with
     ``info = {"failures": [...], "retained_gaps": [...]}``; raises if no chunk
@@ -218,11 +220,11 @@ def _chunked_daily(fetch: Any, start: str, end: str, label: str
         raise ValueError(f"{label}: {start}..{end} contains no day the client requests "
                          f"(leap-year Dec 31 only).")
 
-    def attempt(cs: Any, ce: Any, is_last: bool) -> tuple[Any, dict[str, Any]]:
+    def attempt(cs: Any, ce: Any, tail_edge: bool) -> tuple[Any, dict[str, Any]]:
         try:
             chunk = fetch(str(cs.date()), str(ce.date()))
             return chunk, dv.check_daily_chunk(
-                _times_of(chunk), cs, ce, is_last=is_last, skip_leap_dec31=True)
+                _times_of(chunk), cs, ce, tail_is_archive_edge=tail_edge, skip_leap_dec31=True)
         except AihydroDataError:
             raise                                   # terminal/structured: not a cache problem
         except Exception as exc:                    # noqa: BLE001 - recorded, not hidden
@@ -233,15 +235,17 @@ def _chunked_daily(fetch: Any, start: str, end: str, label: str
     failures: list[dict[str, Any]] = []
     retained: list[dict[str, Any]] = []
     for i, (cs, ce) in enumerate(chunks):
-        is_last = i == len(chunks) - 1
+        # Only the final chunk of a request ending within the recent-publication
+        # window may legitimately stop short (archive extent).
+        tail_edge = i == len(chunks) - 1 and dv.tail_may_be_archive_edge(ce)
         with _HYRIVER_ENV_LOCK:
-            chunk, verdict = attempt(cs, ce, is_last)
+            chunk, verdict = attempt(cs, ce, tail_edge)
             if verdict["status"] != "ok":
                 log.warning("%s chunk %s..%s failed validation (%s); retrying once "
                             "with a private cache", label, cs.date(), ce.date(),
                             "; ".join(verdict["problems"]))
                 with _private_hyriver_cache():
-                    chunk2, verdict2 = attempt(cs, ce, is_last)
+                    chunk2, verdict2 = attempt(cs, ce, tail_edge)
                 if _RANK[verdict2["status"]] <= _RANK[verdict["status"]]:
                     chunk, verdict = chunk2, verdict2
         if verdict["status"] == "bad":
