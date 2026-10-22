@@ -13,7 +13,8 @@ fresh private `HYRIVER_CACHE_NAME` directory; the better of the two attempts is 
 never merged, reason `chunk_mismatch`. If it has the right range but days missing inside it, it is kept and the
 days are disclosed with reason `absent_after_retry`. A tail shortfall is treated as the archive's extent
 (reported by the head/tail coverage fields, not a defect) only in the final chunk of a request whose end is within
-14 days of today (`RECENT_PUBLICATION_DAYS`, an engineering constant: GridMET publishes with a short lag). For any
+14 days of today and is itself at most 14 days long (`RECENT_PUBLICATION_DAYS`, an engineering constant: GridMET
+publishes with a short lag). A larger shortfall is truncation even for a recent request. For any
 older request a short tail is truncation and follows the rule above, so a transient truncation of a historical
 window is neither merged silently nor cached. A one-day chunk that is a leap-year
 Dec 31 is skipped (pygridmet returns `[]` for it). Results carrying `chunk_mismatch` or `absent_after_retry` are

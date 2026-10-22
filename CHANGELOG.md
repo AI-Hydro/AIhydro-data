@@ -28,7 +28,7 @@ dropped 1999. Evidence (byte-identical files, sha256, URL-to-hash reproduction, 
   A short, empty, wrong-range, duplicated or erroring chunk is re-fetched once with a private cache; if still bad
   it is dropped (`chunk_mismatch`). A chunk with days missing inside it is kept and the days are disclosed as
   `absent_after_retry`. A tail shortfall in the final chunk is the archive extent only when the request ends within 14 days of
-  today (engineering constant); otherwise it is truncation. A chunk that is only a
+  today and the shortfall is at most 14 days (engineering constant); otherwise it is truncation. A chunk that is only a
   leap-year Dec 31 is skipped. Daymet calls in `hyriver.py` now run under the same lock as GridMET.
 - A result that carries an unrecovered dropped chunk (`chunk_mismatch`) or a gap that persisted after the retry
   (`absent_after_retry`) is never written to the content-addressed

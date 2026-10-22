@@ -172,7 +172,7 @@ def validate_daily_series(
 
 # Engineering constant, not a measured property of GridMET: a daily product
 # publishes with a short lag, so a request ending within this many days of today
-# may legitimately lack its last days. Any older request that comes back short at
+# may legitimately lack up to that many last days. Any larger shortfall, and any older request that comes back short at
 # the tail is truncation (a transient fault), not the archive's extent.
 RECENT_PUBLICATION_DAYS = 14
 
@@ -223,8 +223,9 @@ def check_daily_chunk(
                  truncated (the first expected day, or the last expected day, is
                  absent). Never merged if it persists.
     A tail shortfall is tolerated only when ``tail_is_archive_edge`` (see
-    ``tail_may_be_archive_edge``): then it is the archive's extent and is left to
-    the head/tail coverage fields.
+    ``tail_may_be_archive_edge``) AND it is at most ``RECENT_PUBLICATION_DAYS`` days:
+    then it is the archive's extent and is left to the head/tail coverage fields.
+    A longer shortfall is truncation even for a recent request.
     """
     lo, hi = pd.Timestamp(chunk_start).normalize(), pd.Timestamp(chunk_end).normalize()
     idx = as_day_index(times)
@@ -248,7 +249,8 @@ def check_daily_chunk(
     if idx.min() > expected[0]:
         return {"status": "bad", "gaps": [], "problems": [
             f"truncated: {len(idx)} of {len(expected)} expected days, first served {idx.min().date()}"]}
-    if idx.max() < expected[-1] and not tail_is_archive_edge:
+    short_tail = int((expected > idx.max()).sum())
+    if short_tail and (not tail_is_archive_edge or short_tail > RECENT_PUBLICATION_DAYS):
         return {"status": "bad", "gaps": [], "problems": [
             f"truncated: {len(idx)} of {len(expected)} expected days, last served {idx.max().date()}"]}
     inner = missing[missing < idx.max()]
