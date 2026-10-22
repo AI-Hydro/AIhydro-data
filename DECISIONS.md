@@ -10,7 +10,9 @@ GridMET calls run under one `RLock` and the variable is set/restored inside it. 
 re-imports the geospatial stack and pickles geometry for a rare path, and cannot be tested with an in-process
 client. Cost: GridMET fetches in one process are serialised. Leap-year Dec 31 days that pygridmet never requests
 are reported as `client_calendar_assumption` and do not by themselves make coverage incomplete (open question:
-whether GridMET really lacks them). Reviewer flag: that last choice is a judgement call.
+whether GridMET really lacks them). Reviewer flag: that last choice is a judgement call (accepted by the lead). A result with a dropped
+`chunk_mismatch` chunk is not cached (transient fault); calendar-assumption-only gaps are cached with their reasons
+in the manifest.
 
 ## 2026-10-02 — Cache key uses the canonical geometry id, not WKT
 

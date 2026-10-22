@@ -178,8 +178,8 @@ def cache_read(
         log.warning("Cache read failed for %s: %s — treating as miss.", ck, exc)
         return None
 
-    from aihydro_data.contracts import FetchResult
     from aihydro_data.contracts import FetchRequest as FR
+    from aihydro_data.contracts import FetchResult
 
     # Reconstruct a minimal FetchRequest for the result (may not match exactly)
     _req = req or FR(
@@ -219,10 +219,11 @@ def cache_read(
     # Coverage is a property of the restored data against the requested window,
     # so recompute it rather than trusting anything stored.
     try:
-        from aihydro_data._pipeline import _temporal_coverage, _skips_leap_dec31
+        from aihydro_data._pipeline import _skips_leap_dec31, _temporal_coverage
         _cov = _temporal_coverage(
             data, _req.start, _req.end, timestep=_timestep,
             skip_leap_dec31=_skips_leap_dec31(_spec) if _spec is not None else False,
+            reason_hints=getattr(manifest, "missing_ranges", None) or (),
         )
     except Exception:
         _cov = {}
@@ -271,6 +272,16 @@ def cache_write(result: "FetchResult", geom_wkt: str = "", geom_id: str = "") ->
     cannot be computed is NOT kept (it could not be verified on read).
     """
     from aihydro_data.cache.manifest import ManifestEntry, write_manifest
+
+    # A dropped chunk (reason chunk_mismatch) is a transient upstream fault, not a
+    # property of the request: caching it would turn one bad download into a
+    # permanent gap. Gaps that are only a client calendar assumption are
+    # deterministic for the product and may be cached.
+    if any(r.get("reason") == "chunk_mismatch"
+           for r in (getattr(result, "missing_ranges", None) or [])):
+        log.warning("Not caching %s: result carries chunk_mismatch gaps (unrecovered "
+                    "dropped chunk).", result.cache_key or result.variable)
+        return None
 
     d = cache_dir()
     ck = result.cache_key or cache_key({
@@ -375,6 +386,7 @@ def cache_write(result: "FetchResult", geom_wkt: str = "", geom_id: str = "") ->
         quality=dict(getattr(result, "quality", {}) or {}),
         upstream=dict(getattr(result, "upstream", {}) or {}),
         data_sha256=sha,
+        missing_ranges=[dict(r) for r in (getattr(result, "missing_ranges", None) or [])],
     )
     try:
         write_manifest(d, entry)

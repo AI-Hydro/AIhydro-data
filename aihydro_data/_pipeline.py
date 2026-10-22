@@ -715,7 +715,8 @@ def _temporal_coverage(data: Any, start: str, end: str,
                        tolerance_days: int = 1,
                        timestep: str = "",
                        skip_leap_dec31: bool = False,
-                       chunk_mismatch_ranges: Any = ()) -> dict[str, Any]:
+                       chunk_mismatch_ranges: Any = (),
+                       reason_hints: Any = ()) -> dict[str, Any]:
     """Compare the window a caller asked for against the window actually served.
 
     A product whose archive ends before the requested window does not fail — it
@@ -783,7 +784,8 @@ def _temporal_coverage(data: Any, start: str, end: str,
         from aihydro_data import _daily_validation as _dv
         if _dv.is_daily(timestep):
             kw = dict(skip_leap_dec31=skip_leap_dec31,
-                      chunk_mismatch_ranges=list(chunk_mismatch_ranges or ()))
+                      chunk_mismatch_ranges=list(chunk_mismatch_ranges or ()),
+                      reason_hints=list(reason_hints or ()))
             internal = _dv.find_missing_ranges(idx, **kw)
             unexplained = sum(r["days"] for r in internal
                               if r["reason"] != _dv.CLIENT_CALENDAR)

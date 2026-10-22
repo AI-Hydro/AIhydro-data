@@ -74,6 +74,7 @@ def find_missing_ranges(
     *,
     skip_leap_dec31: bool = False,
     chunk_mismatch_ranges: Iterable[tuple[Any, Any]] = (),
+    reason_hints: Iterable[dict[str, Any]] = (),
 ) -> list[dict[str, Any]]:
     """Run-compressed daily gaps between ``first`` and ``last`` (default: the
     served first/last day), each with a reason code."""
@@ -89,9 +90,16 @@ def find_missing_ranges(
         return []
     bad = [(pd.Timestamp(a).normalize(), pd.Timestamp(b).normalize())
            for a, b in chunk_mismatch_ranges]
+    # Reasons recorded when the data was fetched (e.g. restored from the cache
+    # manifest) win over anything re-derived from the series alone.
+    hints = [(pd.Timestamp(h["start"]).normalize(), pd.Timestamp(h["end"]).normalize(),
+              h["reason"]) for h in reason_hints or ()]
     reasons = []
     for d in missing:
-        if any(a <= d <= b for a, b in bad):
+        hinted = next((r for a, b, r in hints if a <= d <= b), None)
+        if hinted:
+            reasons.append(hinted)
+        elif any(a <= d <= b for a, b in bad):
             reasons.append(CHUNK_MISMATCH)
         elif skip_leap_dec31 and is_leap_dec31(d):
             reasons.append(CLIENT_CALENDAR)

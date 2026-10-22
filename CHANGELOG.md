@@ -24,6 +24,12 @@ dropped 1999. Evidence (byte-identical files, sha256, URL-to-hash reproduction, 
 
 ### Changed
 
+- A result that carries an unrecovered dropped chunk (`chunk_mismatch`) is never written to the content-addressed
+  cache, so one bad download cannot become a permanent gap. Results whose only gaps are
+  `client_calendar_assumption` are still cached.
+- The cache manifest persists `missing_ranges` with their reason codes; a restore keeps the stored reasons.
+- CI installs the `opendap` and `legacy-usgs` extras (the 10 offline failures on main were missing `netCDF4` and
+  `dataretrieval`); the legacy NWIS test stubs now also replace `dataretrieval.nwis` on the package.
 - `coverage_complete` is False for a daily product when more than `coverage_tolerance_days` days are absent
   inside the served span, except days that are only a `client_calendar_assumption`.
 - `_VARIABLE_CACHE_REVISION` gains `precipitation`, `tmax`, `tmin`, `pet` (revision 1): entries cached before

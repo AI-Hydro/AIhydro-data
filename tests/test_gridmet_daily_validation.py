@@ -170,3 +170,59 @@ def test_precipitation_cache_key_changes_and_others_unchanged():
     for var in ("precipitation", "tmax", "tmin", "pet"):
         assert _result_schema_for(var) == f"{RESULT_SCHEMA_VERSION}.{var}.1"
     assert _result_schema_for("srad") == RESULT_SCHEMA_VERSION      # unlisted: same key
+
+
+# ── caching of degraded results ───────────────────────────────────────────
+
+def _gridmet_result(drop_days, ranges):
+    from aihydro_data.contracts import FetchRequest, FetchResult
+    days = pd.date_range("2000-12-20", "2001-01-10").difference(pd.DatetimeIndex(drop_days))
+    df = pd.DataFrame({"date": days, "precipitation": 1.0})
+    return FetchResult(
+        variable="precipitation", product="GRIDMET_PRECIP", source="hyriver",
+        request=FetchRequest(variable="precipitation", geometry=GEOM,
+                             start="2000-12-20", end="2001-01-10"),
+        cache_key="gridmetkey000000000000", data=df, license="pd", citation="c", bibtex="b",
+        missing_ranges=ranges,
+    )
+
+
+def test_result_with_dropped_chunk_is_not_cached(tmp_path):
+    from unittest.mock import patch
+
+    from aihydro_data.cache import cache_write
+    res = _gridmet_result(
+        pd.date_range("2000-12-25", "2000-12-27"),
+        [{"start": "2000-12-25", "end": "2000-12-27", "days": 3, "reason": "chunk_mismatch"}])
+    with patch("aihydro_data.cache.cache_dir", return_value=tmp_path):
+        assert cache_write(res) is None
+    assert list(tmp_path.iterdir()) == []                 # no data file, no manifest
+
+
+def test_calendar_assumption_gap_is_cached_and_reasons_survive_restore(tmp_path):
+    import json
+    from unittest.mock import patch
+
+    from aihydro_data.cache import cache_read, cache_write
+    rng = [{"start": "2000-12-31", "end": "2000-12-31", "days": 1,
+            "reason": "client_calendar_assumption"}]
+    res = _gridmet_result([pd.Timestamp("2000-12-31")], rng)
+    with patch("aihydro_data.cache.cache_dir", return_value=tmp_path):
+        assert cache_write(res)
+        stored = json.loads((tmp_path / "gridmetkey000000000000.manifest.json").read_text())
+        stored = stored[-1] if isinstance(stored, list) else stored
+        assert stored["missing_ranges"] == rng             # persisted with its reason code
+        back = cache_read("gridmetkey000000000000")
+    assert back.missing_ranges == rng
+    assert back.days_missing_internal == 1
+    assert back.coverage_complete is True
+
+
+def test_stored_reasons_take_precedence_over_rederivation():
+    t = pd.date_range("2000-12-25", "2001-01-03").delete(6)       # 2000-12-31 absent
+    derived = dv.find_missing_ranges(t, skip_leap_dec31=True)
+    assert derived[0]["reason"] == "client_calendar_assumption"
+    hinted = dv.find_missing_ranges(
+        t, skip_leap_dec31=True,
+        reason_hints=[{"start": "2000-12-31", "end": "2000-12-31", "reason": "absent_in_response"}])
+    assert hinted[0]["reason"] == "absent_in_response"

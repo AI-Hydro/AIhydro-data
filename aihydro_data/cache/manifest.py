@@ -15,7 +15,6 @@ import json
 import os
 import tempfile
 import threading
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -53,6 +52,7 @@ class ManifestEntry:
         quality: dict[str, Any] | None = None,
         upstream: dict[str, Any] | None = None,
         data_sha256: str | None = None,
+        missing_ranges: list[dict[str, Any]] | None = None,
     ) -> None:
         self.cache_key = cache_key
         self.variable = variable
@@ -81,6 +81,9 @@ class ManifestEntry:
         # sha256 of the cached data file; cache_read re-hashes and treats a
         # mismatch as a miss.
         self.data_sha256 = data_sha256
+        # Daily products: absent days with reason codes at fetch time, so a restore
+        # keeps the same reasons. Absent (empty) on older entries.
+        self.missing_ranges = missing_ranges or []
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -107,6 +110,7 @@ class ManifestEntry:
             "quality": self.quality,
             "upstream": self.upstream,
             "data_sha256": self.data_sha256,
+            "missing_ranges": self.missing_ranges,
         }
 
     @classmethod
@@ -135,6 +139,7 @@ class ManifestEntry:
             quality=d.get("quality", {}),
             upstream=d.get("upstream", {}),
             data_sha256=d.get("data_sha256"),
+            missing_ranges=d.get("missing_ranges", []),
         )
 
 
