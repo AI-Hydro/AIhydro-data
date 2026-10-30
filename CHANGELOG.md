@@ -3,6 +3,20 @@
 All notable changes to `aihydro-data` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- `coerce_geometry`: a string is a `GaugeID` only when it is digits or `USGS-` + digits. Before, any string that was
+  not WKT became a gauge, so the coordinate string `"-68.5828,47.2375"` was silently treated as a CONUS gauge. A
+  numeric coordinate string now raises `GeometryInvalid` (`GEOMETRY_COORDINATE_STRING`; its axis order is unknowable)
+  and any other non-WKT string raises `GeometryInvalid` (`GEOMETRY_UNPARSEABLE_STRING`). The `(lat, lon)` tuple, bbox,
+  `{"lat","lon"}`, GeoJSON and WKT inputs are unchanged.
+
+### Documentation
+
+- The MCP `data_fetch` docstring and the `GEOMETRY_INVALID` help row recommend `{"lat","lon"}` and state the string rule.
+
 ## [0.2.5] — 2026-10-22
 
 Science Wave 3 (PR-2). A GridMET precipitation fetch for 01031500 (WY1990-2009) came back with 6,935 of 7,305

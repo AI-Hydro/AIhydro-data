@@ -150,8 +150,8 @@ def test_geometry_coercion_invalid():
         coerce_geometry(12345)   # bare int — not a coord, not a string
     with pytest.raises(GeometryInvalid):
         coerce_geometry("")       # empty string is invalid
-    # Strings that aren't WKT fall through to GaugeID (intentional —
-    # NWIS gauge IDs are how direct_api receives "geometry"):
+    # Digit strings (optionally USGS-prefixed) are GaugeID (NWIS gauge IDs are how
+    # direct_api receives "geometry"); other non-WKT strings are refused:
     g = coerce_geometry("03353000")
     assert isinstance(g, GaugeID) and g.id == "03353000"
     # Valid WKT strings parse to real geometries:

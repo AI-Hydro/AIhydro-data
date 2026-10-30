@@ -9,7 +9,12 @@ from __future__ import annotations
 
 from typing import Any, Tuple
 
+import re
+
 # Lazy imports to keep core lightweight.
+
+_COORD_STRING = re.compile(r"[+-]?\d+(?:\.\d*)?(?:\s*,\s*|\s+)[+-]?\d+(?:\.\d*)?")
+_GAUGE_STRING = re.compile(r"(?:USGS-)?\d+", re.IGNORECASE)
 
 
 class GaugeID:
@@ -112,7 +117,11 @@ def coerce_geometry(geom: Any) -> Any:
         - geopandas.GeoDataFrame / GeoSeries  → union of all rows
         - dict with type/coordinates           → GeoJSON
         - shapely BaseGeometry                 → assumed already WGS84
-        - (lat, lon) tuple                     → Point
+        - (lat, lon) tuple                     → Point (library convention; agent-facing
+                                                  tools take {"lat","lon"} instead)
+        - WKT string                           → shapely geometry
+        - USGS gauge id string ('01013500', 'USGS-01013500') → GaugeID
+        - any other string, including a numeric coordinate string → GeometryInvalid
         - (minx, miny, maxx, maxy) tuple/list  → Polygon (bbox)
 
     Raises aihydro_data.exceptions.GeometryInvalid on failure.
@@ -213,9 +222,26 @@ def coerce_geometry(geom: Any) -> Any:
             return _wkt.loads(s)
         except Exception:
             pass
-        # Treat as identifier (gauge ID). Wrap so downstream code can
-        # introspect it consistently.
-        return GaugeID(s)
+        # A numeric coordinate string ("-68.58,47.24") is a position, never a gauge. Its axis
+        # order cannot be known from a string, so it is refused rather than guessed.
+        if _COORD_STRING.fullmatch(s):
+            raise GeometryInvalid(
+                code="GEOMETRY_COORDINATE_STRING",
+                message=f"{s!r} is a coordinate string, not a gauge id or WKT; its axis order is ambiguous.",
+                recovery="Pass {'lat': <lat>, 'lon': <lon>}, a GeoJSON Point, or 'POINT (<lon> <lat>)'.",
+                next_tools=["data_help"],
+                docs_anchor="first_fetch",
+            )
+        # Only a USGS-style station id is a gauge: digits, optionally 'USGS-' prefixed.
+        if _GAUGE_STRING.fullmatch(s):
+            return GaugeID(s)
+        raise GeometryInvalid(
+            code="GEOMETRY_UNPARSEABLE_STRING",
+            message=f"{s[:60]!r} is neither WKT nor a USGS gauge id (digits, optionally 'USGS-' prefixed).",
+            recovery="Pass WKT ('POINT (<lon> <lat>)'), a USGS site number such as '01013500', or {'lat':..,'lon':..}.",
+            next_tools=["data_help"],
+            docs_anchor="first_fetch",
+        )
 
     raise GeometryInvalid(
         code="GEOMETRY_UNSUPPORTED_TYPE",
