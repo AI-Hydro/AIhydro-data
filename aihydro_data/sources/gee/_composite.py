@@ -8,6 +8,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from aihydro_data.sources._gee_vendored.dates import filter_end
+
 log = logging.getLogger(__name__)
 
 
@@ -219,7 +221,7 @@ class _CompositeMixin:
         """
         import ee
 
-        coll = ee.ImageCollection(dataset_id).filterDate(start, end).filterBounds(roi)
+        coll = ee.ImageCollection(dataset_id).filterDate(start, filter_end(end)).filterBounds(roi)
         if cloud_property:
             try:
                 coll = coll.filter(ee.Filter.lt(cloud_property, max_cloud_pct))
@@ -278,7 +280,7 @@ class _CompositeMixin:
             roi = ee.Geometry(roi_geojson)
             nir, red = ndvi_bands[0], ndvi_bands[1]
 
-            coll = ee.ImageCollection(dataset_id).filterDate(start, end).filterBounds(roi)
+            coll = ee.ImageCollection(dataset_id).filterDate(start, filter_end(end)).filterBounds(roi)
             try:
                 coll = coll.filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", max_cloud_pct))
             except Exception as exc:

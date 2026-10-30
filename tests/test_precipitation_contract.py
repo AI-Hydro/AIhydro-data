@@ -118,7 +118,7 @@ def test_extractor_failure_and_ordinary_path(monkeypatch):
     assert "missing half-hours" in result["message"]
     result = timeseries.extract_timeseries(**args)
     assert result["ok"] is True and len(result["rows"]) == 47
-    assert calls["window"] == ("2024-02-28", "2024-02-29")
+    assert calls["window"] == ("2024-02-28", "2024-03-01")   # inclusive end 02-29 -> exclusive filterDate end (D10)
 
 
 def test_old_native_rate_cache_is_not_reused(tmp_path, monkeypatch):

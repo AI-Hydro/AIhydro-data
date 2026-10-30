@@ -11,8 +11,10 @@ with a reason code instead of guessing a cause.
 Reason codes carried by ``missing_ranges``:
 
 ``client_calendar_assumption``  the client library never asked for the day
-    (pygridmet skips Dec 31 in leap years). Whether the SOURCE lacks the day
-    is unverified, so it is not reported as missing in the source.
+    (pygridmet skips Dec 31 in leap years). Whether GridMET itself lacks the day
+    is unverified, so it is not reported as missing in the source. For Daymet the
+    SOURCE has no 31 Dec in leap years (365-day calendar); the same code is used, and it
+    means "the product cannot hold this day", not "the client did not ask".
 ``chunk_mismatch``              a chunk was rejected (wrong time range or
     duplicate) and not merged; its days are absent from the result.
 ``absent_in_response``          the day is simply not in the returned series.
@@ -42,11 +44,17 @@ def is_daily(timestep: str) -> bool:
 
 
 def skips_leap_dec31(spec: Any) -> bool:
-    """True when the product's client library never requests Dec 31 of leap
-    years (pygridmet; unverified for GridMET itself, so only disclosed)."""
+    """True when the product never holds 31 Dec of a leap year.
+
+    Daymet's calendar is 365 days a year (it drops 31 Dec in leap years), a property of the
+    source; pygridmet never requests that day (unverified for GridMET itself, so only
+    disclosed). Both are HyRiver products; a day the product cannot hold is listed in
+    ``missing_ranges`` but is not a coverage failure.
+    """
     try:
+        cfg = spec.backend_config or {}
         return (getattr(spec, "source", "") == "hyriver"
-                and "pygridmet_variable" in (spec.backend_config or {}))
+                and ("pygridmet_variable" in cfg or "pydaymet_variable" in cfg))
     except Exception:
         return False
 

@@ -685,9 +685,18 @@ RESULT_SCHEMA_VERSION = 5
 #                 output validation can hold a cross-wired year (a 1999 chunk
 #                 that is really 2006, merged silently by pygridmet 0.19.4),
 #                 so they must not be served (Science Wave 3, 2026-10-22).
+#   precipitation/tmax/tmin/pet 2, tmean/soil_moisture/ndvi/lai/et/optical 1: Earth Engine
+#                 windows used to drop the request's last day (filterDate's end is exclusive,
+#                 the contract inclusive; tool audit D10). An entry cached before the fix holds
+#                 one day too few, or a composite that left the last day out, under the same
+#                 key, and must not be served (0.2.6, 2026-10-30). Every variable with a
+#                 windowed (non-static) Earth Engine product is listed, and a test walks the product
+#                 registry so a new one cannot be missed (population 1 added: GHSL/WorldPop/GPW
+#                 yearly windows).
 _VARIABLE_CACHE_REVISION: dict[str, int] = {
     "impervious": 1, "dem": 1, "streamflow": 2,
-    "precipitation": 1, "tmax": 1, "tmin": 1, "pet": 1,
+    "precipitation": 2, "tmax": 2, "tmin": 2, "pet": 2,
+    "tmean": 1, "soil_moisture": 1, "ndvi": 1, "lai": 1, "et": 1, "optical": 1, "population": 1,
 }
 
 
@@ -742,6 +751,12 @@ def _temporal_coverage(data: Any, start: str, end: str,
         "days_missing_internal": 0, "missing_ranges": [],
         "coverage_tolerance_days": tolerance_days,
     }
+    # A daily product is expected to hold the requested last (and first) day: with the
+    # inclusive-end contract (aihydro_data.sources._gee_vendored.dates.filter_end) one missing
+    # day at either end IS a missing day, so the head/tail tolerance is 0 there. The caller's
+    # tolerance still applies to other timesteps and to unexplained internal gaps.
+    from aihydro_data import _daily_validation as _dv0
+    edge_tolerance = 0 if _dv0.is_daily(timestep) else tolerance_days
     try:
         import pandas as pd
 
@@ -762,6 +777,13 @@ def _temporal_coverage(data: Any, start: str, end: str,
         idx = idx.dropna()
         if idx.empty:
             return out
+        # Whole calendar days: a series stamped at noon (or 23:00 UTC) is still that day.
+        # Without this a series ending 2020-01-30T12:00 requested to 2020-01-31 had a tail of 0
+        # (a 12-hour difference floors to 0 days).
+        idx = pd.Series(idx)
+        if getattr(idx.dt, "tz", None) is not None:
+            idx = idx.dt.tz_localize(None)
+        idx = idx.dt.normalize()
 
         actual_start, actual_end = idx.min(), idx.max()
         if (timestep or "").strip().lower() in _EPOCHAL_TIMESTEPS:
@@ -770,16 +792,25 @@ def _temporal_coverage(data: Any, start: str, end: str,
                        coverage_end=str(actual_end.date()),
                        coverage_complete=True)
             return out
-        req_start, req_end = pd.to_datetime(start), pd.to_datetime(end)
+        req_start, req_end = pd.to_datetime(start).normalize(), pd.to_datetime(end).normalize()
         head = max(0, (actual_start - req_start).days)
         tail = max(0, (req_end - actual_end).days)
+        # A product that never holds 31 Dec of a leap year (pygridmet never requests it; Daymet's
+        # calendar lacks it) leaves exactly that day off a window that starts or ends on it:
+        # disclosed in missing_ranges, not an edge failure.
+        def _skipped_leap_dec31(day, n):
+            return bool(skip_leap_dec31 and n == 1 and day.month == 12 and day.day == 31
+                        and day.is_leap_year)
+        head_gap = 0 if _skipped_leap_dec31(req_start, head) else head
+        tail_gap = 0 if _skipped_leap_dec31(req_end, tail) else tail
 
         out.update(
             coverage_start=str(actual_start.date()),
             coverage_end=str(actual_end.date()),
             days_missing_head=int(head),
             days_missing_tail=int(tail),
-            coverage_complete=bool(head <= tolerance_days and tail <= tolerance_days),
+            coverage_complete=bool(head_gap <= edge_tolerance and tail_gap <= edge_tolerance),
+            coverage_tolerance_days=edge_tolerance,
         )
         from aihydro_data import _daily_validation as _dv
         if _dv.is_daily(timestep):
