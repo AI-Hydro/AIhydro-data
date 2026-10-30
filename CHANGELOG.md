@@ -3,6 +3,22 @@
 All notable changes to `aihydro-data` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+Tool audit D10 (T1-P): the last day of every Earth Engine daily window was lost.
+
+### Fixed
+
+- `ee.ImageCollection.filterDate(start, end)` excludes `end`; the public contract is an inclusive end. A
+  `2020-01-01..2020-01-31` CHIRPS/ERA5-Land/SMAP request returned 30 rows (last `2020-01-30`) and a single-day
+  request returned 0. Every `filterDate` call (`_gee_vendored/timeseries.py`, `_gee_vendored/map_layers.py`,
+  `gee/_composite.py` x2) now passes its end through `_gee_vendored.dates.filter_end`, the one place that knows
+  about the off-by-one. A test fails if a `filterDate` call bypasses it. The IMERG integration contract keeps its own
+  half-open window.
+- `coverage_complete` for a daily product no longer tolerates a missing first or last day (head/tail tolerance 0, was 1);
+  `coverage_tolerance_days` reports the value applied. A leap-day 31 Dec that pygridmet never requests, and that ends or
+  starts the window, is still only disclosed in `missing_ranges`.
+
 ## [0.2.5] — 2026-10-22
 
 Science Wave 3 (PR-2). A GridMET precipitation fetch for 01031500 (WY1990-2009) came back with 6,935 of 7,305

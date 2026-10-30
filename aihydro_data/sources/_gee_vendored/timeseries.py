@@ -6,6 +6,7 @@ from typing import Any
 import pandas as pd
 
 from .auth import _import_ee
+from .dates import filter_end
 
 
 def _aggregate_rows(rows: list[dict[str, Any]], temporal_aggregation: str) -> list[dict[str, Any]]:
@@ -63,7 +64,7 @@ def extract_timeseries(
 
     if temporal_contract is not None and temporal_contract != CONTRACT:
         raise ValueError(f"Unknown temporal contract: {temporal_contract}")
-    query_end = end_date
+    query_end = filter_end(end_date)          # filterDate's end is exclusive; end_date is inclusive
     if temporal_contract == CONTRACT:
         if temporal_aggregation != "daily":
             raise ValueError("IMERG integration contract supports daily output only")

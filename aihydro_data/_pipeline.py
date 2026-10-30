@@ -742,6 +742,12 @@ def _temporal_coverage(data: Any, start: str, end: str,
         "days_missing_internal": 0, "missing_ranges": [],
         "coverage_tolerance_days": tolerance_days,
     }
+    # A daily product is expected to hold the requested last (and first) day: with the
+    # inclusive-end contract (aihydro_data.sources._gee_vendored.dates.filter_end) one missing
+    # day at either end IS a missing day, so the head/tail tolerance is 0 there. The caller's
+    # tolerance still applies to other timesteps and to unexplained internal gaps.
+    from aihydro_data import _daily_validation as _dv0
+    edge_tolerance = 0 if _dv0.is_daily(timestep) else tolerance_days
     try:
         import pandas as pd
 
@@ -773,13 +779,21 @@ def _temporal_coverage(data: Any, start: str, end: str,
         req_start, req_end = pd.to_datetime(start), pd.to_datetime(end)
         head = max(0, (actual_start - req_start).days)
         tail = max(0, (req_end - actual_end).days)
+        # A client that never asks for 31 Dec of a leap year (pygridmet) leaves exactly that day
+        # off a window that starts or ends on it: disclosed in missing_ranges, not an edge failure.
+        def _skipped_leap_dec31(day, n):
+            return bool(skip_leap_dec31 and n == 1 and day.month == 12 and day.day == 31
+                        and day.is_leap_year)
+        head_gap = 0 if _skipped_leap_dec31(req_start, head) else head
+        tail_gap = 0 if _skipped_leap_dec31(req_end, tail) else tail
 
         out.update(
             coverage_start=str(actual_start.date()),
             coverage_end=str(actual_end.date()),
             days_missing_head=int(head),
             days_missing_tail=int(tail),
-            coverage_complete=bool(head <= tolerance_days and tail <= tolerance_days),
+            coverage_complete=bool(head_gap <= edge_tolerance and tail_gap <= edge_tolerance),
+            coverage_tolerance_days=edge_tolerance,
         )
         from aihydro_data import _daily_validation as _dv
         if _dv.is_daily(timestep):
