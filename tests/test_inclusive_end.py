@@ -119,15 +119,26 @@ def test_noon_stamped_series_ending_a_day_early_is_incomplete():
     assert _temporal_coverage(tz, "2020-01-01", "2020-01-31", timestep="daily")["days_missing_tail"] == 1
 
 
-@pytest.mark.parametrize("var", ["precipitation", "tmax", "tmin", "pet", "tmean", "soil_moisture",
-                                 "ndvi", "lai", "et", "optical"])
+def _windowed_gee_variables():
+    from aihydro_data.products import list_products
+    return sorted({p.variable for p in list_products() if p.source == "gee" and p.timestep != "static"})
+
+
+def test_the_registry_walk_finds_the_variables_this_fix_covers():
+    assert {"precipitation", "tmax", "tmin", "pet", "tmean", "soil_moisture", "ndvi", "lai", "et", "optical",
+            "population"} <= set(_windowed_gee_variables())
+
+
+@pytest.mark.parametrize("var", _windowed_gee_variables())
 def test_pre_fix_gee_cache_entries_are_not_served(var):
-    """Entries cached when the last day was dropped carry the old schema tag; the key now differs."""
-    from aihydro_data._pipeline import RESULT_SCHEMA_VERSION, _result_schema_for
+    """Every windowed Earth Engine variable's old-schema key differs from the new one (registry-driven)."""
+    from aihydro_data._pipeline import RESULT_SCHEMA_VERSION, _VARIABLE_CACHE_REVISION, _result_schema_for
     from aihydro_data.cache import cache_key
     new = _result_schema_for(var)
-    old = RESULT_SCHEMA_VERSION if var not in ("precipitation", "tmax", "tmin", "pet") \
-        else f"{RESULT_SCHEMA_VERSION}.{var}.1"
+    assert var in _VARIABLE_CACHE_REVISION, f"{var} has windowed GEE products but no cache revision"
+    rev = _VARIABLE_CACHE_REVISION[var]
+    old = RESULT_SCHEMA_VERSION if rev == 1 and var not in ("precipitation", "tmax", "tmin", "pet") \
+        else f"{RESULT_SCHEMA_VERSION}.{var}.{rev - 1}"
     payload = {"variable": var, "start": "2020-01-01", "end": "2020-01-31", "aggregation": "basin_mean"}
     assert new != old
     assert cache_key({**payload, "result_schema": new}) != cache_key({**payload, "result_schema": old})

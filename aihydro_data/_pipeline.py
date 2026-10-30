@@ -690,11 +690,13 @@ RESULT_SCHEMA_VERSION = 5
 #                 the contract inclusive; tool audit D10). An entry cached before the fix holds
 #                 one day too few, or a composite that left the last day out, under the same
 #                 key, and must not be served (0.2.6, 2026-10-30). Every variable with a
-#                 windowed Earth Engine product is listed; static GEE products take no window.
+#                 windowed (non-static) Earth Engine product is listed, and a test walks the product
+#                 registry so a new one cannot be missed (population 1 added: GHSL/WorldPop/GPW
+#                 yearly windows).
 _VARIABLE_CACHE_REVISION: dict[str, int] = {
     "impervious": 1, "dem": 1, "streamflow": 2,
     "precipitation": 2, "tmax": 2, "tmin": 2, "pet": 2,
-    "tmean": 1, "soil_moisture": 1, "ndvi": 1, "lai": 1, "et": 1, "optical": 1,
+    "tmean": 1, "soil_moisture": 1, "ndvi": 1, "lai": 1, "et": 1, "optical": 1, "population": 1,
 }
 
 
@@ -793,8 +795,9 @@ def _temporal_coverage(data: Any, start: str, end: str,
         req_start, req_end = pd.to_datetime(start).normalize(), pd.to_datetime(end).normalize()
         head = max(0, (actual_start - req_start).days)
         tail = max(0, (req_end - actual_end).days)
-        # A client that never asks for 31 Dec of a leap year (pygridmet) leaves exactly that day
-        # off a window that starts or ends on it: disclosed in missing_ranges, not an edge failure.
+        # A product that never holds 31 Dec of a leap year (pygridmet never requests it; Daymet's
+        # calendar lacks it) leaves exactly that day off a window that starts or ends on it:
+        # disclosed in missing_ranges, not an edge failure.
         def _skipped_leap_dec31(day, n):
             return bool(skip_leap_dec31 and n == 1 and day.month == 12 and day.day == 31
                         and day.is_leap_year)

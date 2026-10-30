@@ -11,8 +11,10 @@ with a reason code instead of guessing a cause.
 Reason codes carried by ``missing_ranges``:
 
 ``client_calendar_assumption``  the client library never asked for the day
-    (pygridmet skips Dec 31 in leap years). Whether the SOURCE lacks the day
-    is unverified, so it is not reported as missing in the source.
+    (pygridmet skips Dec 31 in leap years). Whether GridMET itself lacks the day
+    is unverified, so it is not reported as missing in the source. For Daymet the
+    SOURCE has no 31 Dec in leap years (365-day calendar); the same code is used, and it
+    means "the product cannot hold this day", not "the client did not ask".
 ``chunk_mismatch``              a chunk was rejected (wrong time range or
     duplicate) and not merged; its days are absent from the result.
 ``absent_in_response``          the day is simply not in the returned series.

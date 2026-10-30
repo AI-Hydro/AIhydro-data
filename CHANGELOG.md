@@ -5,13 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.2.6] — unreleased (2026-10-30)
 
+**Release note for installed users (tools 2.8.4 pins `aihydro-data<0.3` and will pick this up).** Earth Engine daily windows now
+include the requested last day (one more row per request); `coverage_complete` is False for a daily product that misses its first
+or last day by one day (it was True); a Daymet window ending on a leap 31 Dec is True (it was already tolerated, now by rule);
+and the cache entries of every windowed Earth Engine variable are invalidated, so upgraded installs refetch once.
+
 Tool audit D10 (T1-P): the last day of every Earth Engine daily window was lost.
 
 ### Fixed
 
 - **Cache invalidation.** Entries cached while the last day was dropped must not be served: `_VARIABLE_CACHE_REVISION`
   is bumped for `precipitation`, `tmax`, `tmin`, `pet` (to 2) and set for `tmean`, `soil_moisture`, `ndvi`, `lai`, `et`,
-  `optical` (every variable with a windowed Earth Engine product). Static GEE products take no window.
+  `optical`, `population` (every variable with a windowed, non-static Earth Engine product; a test walks the registry). Static GEE products take no window.
 - `_temporal_coverage` compares whole calendar days (a series stamped at noon, or tz-aware, ending 01-30 for a request to
   01-31 now reports tail 1 and incomplete). Daymet joins pygridmet in `skips_leap_dec31` (its calendar has no 31 Dec in leap
   years). A malformed `end_date` is returned as a structured refusal (`ok: False`), not raised.
