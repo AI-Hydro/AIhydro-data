@@ -18,6 +18,17 @@ Tool audit D10 (T1-P): the last day of every Earth Engine daily window was lost.
 - `coverage_complete` for a daily product no longer tolerates a missing first or last day (head/tail tolerance 0, was 1);
   `coverage_tolerance_days` reports the value applied. A leap-day 31 Dec that pygridmet never requests, and that ends or
   starts the window, is still only disclosed in `missing_ranges`.
+### Fixed
+
+- `coerce_geometry`: a string is a `GaugeID` only when it is digits or `USGS-` + digits. Before, any string that was
+  not WKT became a gauge, so the coordinate string `"-68.5828,47.2375"` was silently treated as a CONUS gauge. A
+  numeric coordinate string now raises `GeometryInvalid` (`GEOMETRY_COORDINATE_STRING`; its axis order is unknowable)
+  and any other non-WKT string raises `GeometryInvalid` (`GEOMETRY_UNPARSEABLE_STRING`). The `(lat, lon)` tuple, bbox,
+  `{"lat","lon"}`, GeoJSON and WKT inputs are unchanged.
+
+### Documentation
+
+- The MCP `data_fetch` docstring and the `GEOMETRY_INVALID` help row recommend `{"lat","lon"}` and state the string rule.
 
 ## [0.2.5] — 2026-10-22
 
