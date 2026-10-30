@@ -201,7 +201,7 @@ def test_validator_flags_duplicates_missing_year_and_cross_wired_chunk():
 
 def test_precipitation_cache_key_changes_and_others_unchanged():
     for var in ("precipitation", "tmax", "tmin", "pet"):
-        assert _result_schema_for(var) == f"{RESULT_SCHEMA_VERSION}.{var}.1"
+        assert _result_schema_for(var) == f"{RESULT_SCHEMA_VERSION}.{var}.2"
     assert _result_schema_for("srad") == RESULT_SCHEMA_VERSION      # unlisted: same key
 
 

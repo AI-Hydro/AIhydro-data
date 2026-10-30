@@ -3,12 +3,18 @@
 All notable changes to `aihydro-data` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.2.6] — unreleased (2026-10-30)
 
 Tool audit D10 (T1-P): the last day of every Earth Engine daily window was lost.
 
 ### Fixed
 
+- **Cache invalidation.** Entries cached while the last day was dropped must not be served: `_VARIABLE_CACHE_REVISION`
+  is bumped for `precipitation`, `tmax`, `tmin`, `pet` (to 2) and set for `tmean`, `soil_moisture`, `ndvi`, `lai`, `et`,
+  `optical` (every variable with a windowed Earth Engine product). Static GEE products take no window.
+- `_temporal_coverage` compares whole calendar days (a series stamped at noon, or tz-aware, ending 01-30 for a request to
+  01-31 now reports tail 1 and incomplete). Daymet joins pygridmet in `skips_leap_dec31` (its calendar has no 31 Dec in leap
+  years). A malformed `end_date` is returned as a structured refusal (`ok: False`), not raised.
 - `ee.ImageCollection.filterDate(start, end)` excludes `end`; the public contract is an inclusive end. A
   `2020-01-01..2020-01-31` CHIRPS/ERA5-Land/SMAP request returned 30 rows (last `2020-01-30`) and a single-day
   request returned 0. Every `filterDate` call (`_gee_vendored/timeseries.py`, `_gee_vendored/map_layers.py`,

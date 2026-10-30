@@ -64,7 +64,13 @@ def extract_timeseries(
 
     if temporal_contract is not None and temporal_contract != CONTRACT:
         raise ValueError(f"Unknown temporal contract: {temporal_contract}")
-    query_end = filter_end(end_date)          # filterDate's end is exclusive; end_date is inclusive
+    try:
+        query_end = filter_end(end_date)      # filterDate's end is exclusive; end_date is inclusive
+    except (ValueError, TypeError) as exc:
+        return {"ok": False, "mock": False, "type": "gee_timeseries", "rows": [],
+                "message": f"invalid end_date {end_date!r}: {exc}",
+                "provenance": {"adapter": "aihydro_gee", "operation": "extract_timeseries",
+                               "dataset_id": dataset_id, "band": band}}
     if temporal_contract == CONTRACT:
         if temporal_aggregation != "daily":
             raise ValueError("IMERG integration contract supports daily output only")

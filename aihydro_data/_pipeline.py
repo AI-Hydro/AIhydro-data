@@ -685,9 +685,16 @@ RESULT_SCHEMA_VERSION = 5
 #                 output validation can hold a cross-wired year (a 1999 chunk
 #                 that is really 2006, merged silently by pygridmet 0.19.4),
 #                 so they must not be served (Science Wave 3, 2026-10-22).
+#   precipitation/tmax/tmin/pet 2, tmean/soil_moisture/ndvi/lai/et/optical 1: Earth Engine
+#                 windows used to drop the request's last day (filterDate's end is exclusive,
+#                 the contract inclusive; tool audit D10). An entry cached before the fix holds
+#                 one day too few, or a composite that left the last day out, under the same
+#                 key, and must not be served (0.2.6, 2026-10-30). Every variable with a
+#                 windowed Earth Engine product is listed; static GEE products take no window.
 _VARIABLE_CACHE_REVISION: dict[str, int] = {
     "impervious": 1, "dem": 1, "streamflow": 2,
-    "precipitation": 1, "tmax": 1, "tmin": 1, "pet": 1,
+    "precipitation": 2, "tmax": 2, "tmin": 2, "pet": 2,
+    "tmean": 1, "soil_moisture": 1, "ndvi": 1, "lai": 1, "et": 1, "optical": 1,
 }
 
 
@@ -768,6 +775,13 @@ def _temporal_coverage(data: Any, start: str, end: str,
         idx = idx.dropna()
         if idx.empty:
             return out
+        # Whole calendar days: a series stamped at noon (or 23:00 UTC) is still that day.
+        # Without this a series ending 2020-01-30T12:00 requested to 2020-01-31 had a tail of 0
+        # (a 12-hour difference floors to 0 days).
+        idx = pd.Series(idx)
+        if getattr(idx.dt, "tz", None) is not None:
+            idx = idx.dt.tz_localize(None)
+        idx = idx.dt.normalize()
 
         actual_start, actual_end = idx.min(), idx.max()
         if (timestep or "").strip().lower() in _EPOCHAL_TIMESTEPS:
@@ -776,7 +790,7 @@ def _temporal_coverage(data: Any, start: str, end: str,
                        coverage_end=str(actual_end.date()),
                        coverage_complete=True)
             return out
-        req_start, req_end = pd.to_datetime(start), pd.to_datetime(end)
+        req_start, req_end = pd.to_datetime(start).normalize(), pd.to_datetime(end).normalize()
         head = max(0, (actual_start - req_start).days)
         tail = max(0, (req_end - actual_end).days)
         # A client that never asks for 31 Dec of a leap year (pygridmet) leaves exactly that day

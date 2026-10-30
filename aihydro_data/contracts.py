@@ -227,8 +227,11 @@ class FetchResult(BaseModel):
     # so downstream code never mistakes absent data for measured values — a
     # `.tail(7).sum()` over a series that ends before the window does silently
     # returns 0.0, which reads as "nothing happened" but means "nothing known".
-    # `coverage_complete` is False whenever either end falls short by more than
-    # `coverage_tolerance_days`.
+    # `coverage_complete` is False whenever either end falls short by more than the
+    # head/tail tolerance. For a DAILY product that tolerance is 0 (a missing first
+    # or last day is a missing day) and `coverage_tolerance_days` reports the value
+    # applied; for other timesteps it is the caller's tolerance (default 1). The
+    # tolerance for unexplained gaps INSIDE the series stays the caller's.
     coverage_start: str = ""
     coverage_end: str = ""
     coverage_complete: bool = True
