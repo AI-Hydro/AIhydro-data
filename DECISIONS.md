@@ -1,5 +1,16 @@
 # Decisions
 
+## 2026-10-30 — A string is a gauge only if it looks like one
+
+`coerce_geometry` turned every string that was not WKT into a `GaugeID`. An agent sent `"-68.5828,47.2375"`, which
+became a gauge in region CONUS, so a place was treated as a station. Now a string is a gauge only when it is digits,
+optionally `USGS-` prefixed (what `usgs_waterdata._site_id` accepts, minus the 8-15 length rule, which that function
+enforces later with its own terminal code). A numeric coordinate string is refused (`GEOMETRY_COORDINATE_STRING`), not
+parsed: the string carries no axis order and the library's tuple convention is (lat, lon) while GeoJSON is (lon, lat), so
+any parse would be a guess. Other strings are refused (`GEOMETRY_UNPARSEABLE_STRING`). Non-USGS station ids are built
+with `GaugeID(id, scheme=...)`, not by string coercion. The `(lat, lon)` tuple stays as documented for library callers;
+the agent-facing layer (aihydro-tools) does not accept bare pairs at all.
+
 ## 2026-10-22 — Validate daily gridded output; isolate the retry cache by lock, not subprocess
 
 pygridmet 0.19.4 merges per-year cache files without checking that each holds its own year. We validate output

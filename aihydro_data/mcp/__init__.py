@@ -218,8 +218,11 @@ def _data_fetch(
     Args:
         variable:    Canonical variable name ('precipitation', 'tmax', 'et', …).
                      Call data_list_products() with no args to see all variables.
-        geometry:    One of: (lat, lon) tuple, [minx, miny, maxx, maxy] bbox,
-                     GeoJSON dict, WKT string, or a dict with 'type'+'coordinates'.
+        geometry:    One of: {"lat": .., "lon": ..} (preferred; unambiguous), [minx, miny, maxx, maxy]
+                     bbox, GeoJSON dict, WKT string, a USGS gauge id ('01013500'), or a dict with
+                     'type'+'coordinates'. A bare (lat, lon) pair has no stated axis order: callers
+                     driven by an agent should send the dict form. A numeric string like
+                     '-68.58,47.24' is refused (GEOMETRY_COORDINATE_STRING), never read as a gauge.
         start:       ISO-8601 start date, e.g. '2015-01-01'.
         end:         ISO-8601 end date (inclusive), e.g. '2015-12-31'.
         mode:        'auto' (router picks best product for the region) or

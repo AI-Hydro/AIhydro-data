@@ -24,7 +24,7 @@ All errors return a structured envelope:
 | `PRODUCT_NOT_FOUND`    | Unknown product ID                              | `data_list_products()` for valid IDs                         |
 | `REGION_UNSUPPORTED`   | Region detected but no chain defined            | Add `product=` to force a specific product                   |
 | `DATE_OUT_OF_RANGE`    | Dates outside product temporal coverage         | Adjust dates; see `data_describe_product(product_id).temporal_start` |
-| `GEOMETRY_INVALID`     | Could not parse / coerce the geometry           | Use `(lat, lon)` tuple or valid GeoJSON dict                 |
+| `GEOMETRY_INVALID`     | Could not parse / coerce the geometry           | Use `{"lat":..,"lon":..}`, a `(lat, lon)` tuple (library) or valid GeoJSON dict; a gauge id is digits / `USGS-` + digits only                 |
 | `MISSING_EXTRAS`       | Required package not installed                  | `pip install aihydro-data[<extra>]`                          |
 | `FETCH_TOO_LARGE`      | Estimated request volume too large              | Use `aggregation="basin_mean"` or split time range           |
 | `GAUGE_REQUIRED`       | Gauge not identifiable (polygon without outlet, or outlet off the network with no polygon) | Pass a USGS site number, a polygon plus `outlet=(lat, lon)`, or ask for a modelled product explicitly |
