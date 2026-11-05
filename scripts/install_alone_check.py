@@ -10,6 +10,10 @@ Task: discover data products offline through the public CLI and Python API.
      registered streamflow products, each with a citation and a licence;
   2. ``aihydro-data describe NWIS_STREAMFLOW`` returns that product's full spec;
   3. the Python ``list_products``/``get_product`` agree with the CLI.
+
+Socket block: an IN-PROCESS patch of the Python ``socket`` module (connect, create_connection,
+getaddrinfo). It does not cover child processes or C libraries that open sockets themselves, so
+it is evidence that this Python code made no network call, not an OS-level sandbox.
 """
 from __future__ import annotations
 
