@@ -3,6 +3,13 @@
 All notable changes to `aihydro-data` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- `install-alone` CI workflow (AGU ecosystem audit C1, "independently usable"): builds the wheel, installs only it in a fresh venv outside
+  the checkout, and runs `scripts/install_alone_check.py` with every socket connection refused. Task:  list and describe data products through the `aihydro-data` CLI and the Python registry API. No code change; no version bump.
+
 ## [0.2.6] — unreleased (2026-10-30)
 
 **Release note for installed users (tools 2.8.4 pins `aihydro-data<0.3` and will pick this up).** Earth Engine daily windows now
