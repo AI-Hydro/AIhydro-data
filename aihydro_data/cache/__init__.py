@@ -93,6 +93,19 @@ def _age_days(iso: str) -> Optional[float]:
 
 # ── Read ──────────────────────────────────────────────────────────────────
 
+CRS_ATTR = "aihydro_crs_wkt"
+
+
+def _crs_wkt_of(data) -> str:
+    """WKT of the raster's CRS, or "" when it has none (an explicit, stored 'no CRS')."""
+    try:
+        import rioxarray  # noqa: F401  (registers .rio)
+        crs = data.rio.crs
+        return crs.to_wkt() if crs is not None else ""
+    except Exception:
+        return ""
+
+
 def cache_read(
     ck: str,
     req: Optional["FetchRequest"] = None,
@@ -174,6 +187,17 @@ def cache_read(
                 data = ds[nd_vars[0]]   # restore as DataArray
             else:
                 data = ds
+            _stored = data.attrs.get(CRS_ATTR, ds.attrs.get(CRS_ATTR))
+            if _stored is None:
+                # Written before the CRS was preserved: the file cannot say what grid it is
+                # on. Never assume one (EPSG:4326 would be a guess); refetch so the new entry
+                # carries it.
+                log.info("Cache entry %s is a raster with no stored CRS (legacy) — treating as miss.", ck)
+                if miss_reasons is not None:
+                    miss_reasons.append("cached raster has no stored CRS (written by an older version)")
+                return None
+            if _stored:
+                data = data.rio.write_crs(_stored)
     except Exception as exc:
         log.warning("Cache read failed for %s: %s — treating as miss.", ck, exc)
         return None
@@ -315,6 +339,11 @@ def cache_write(result: "FetchResult", geom_wkt: str = "", geom_id: str = "") ->
                     # Also strip any non-serialisable attributes (e.g. stackstac's
                     # RasterSpec object) that would crash the netCDF encoder.
                     _to_save = data
+                    # Keep the CRS: dropping `spatial_ref` below would otherwise lose it on
+                    # the round trip, and a cache-served DEM would have no CRS (slope and any
+                    # metric computation then cannot know its units). Stored as WKT in the
+                    # attr CRS_ATTR; "" records "this raster has no CRS" explicitly.
+                    _crs_wkt = _crs_wkt_of(data)
                     if isinstance(data, xr.DataArray) and "spatial_ref" in data.coords:
                         _to_save = data.drop_vars("spatial_ref")
                     # Scrub non-primitive attrs and object-dtype coordinates
@@ -327,6 +356,7 @@ def cache_write(result: "FetchResult", geom_wkt: str = "", geom_id: str = "") ->
                         k: v for k, v in _to_save.attrs.items()
                         if isinstance(v, (str, int, float, bytes, bool, list, tuple))
                     }
+                    _to_save.attrs[CRS_ATTR] = _crs_wkt
                     # 2. Drop coordinates whose dtype is 'object' or whose values
                     #    cannot be serialised (covers proj:shape, proj:transform,
                     #    proj:bbox from stackstac and similar).
