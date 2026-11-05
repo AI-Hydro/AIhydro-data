@@ -84,3 +84,34 @@ def test_attr_is_wkt_not_an_assumed_epsg(tmp_path):
         cache_write(_result(da, "wkt0000000000000000000"), geom_wkt="POINT (0 0)")
     stored = xr.open_dataset(tmp_path / "wkt0000000000000000000.nc")["dem"].attrs[CRS_ATTR]
     assert "UTM zone 14N" in stored
+
+
+def test_legacy_miss_closes_the_dataset_so_the_file_can_be_replaced(tmp_path, monkeypatch):
+    """An open handle on the legacy .nc would block the rewrite on Windows."""
+    ck = "close0000000000000000000"
+    da = _raster("EPSG:4326")
+    closed = []
+    real_close = xr.Dataset.close
+
+    def _spy(self):
+        closed.append(1)
+        return real_close(self)
+
+    with patch("aihydro_data.cache.cache_dir", return_value=tmp_path):
+        cache_write(_result(da, ck), geom_wkt="POINT (-100 35)")
+        nc = tmp_path / f"{ck}.nc"
+        legacy = da.drop_vars("spatial_ref")
+        legacy.attrs = {k: v for k, v in legacy.attrs.items() if k != CRS_ATTR}
+        nc.unlink()
+        legacy.to_netcdf(nc)
+        import json
+        from aihydro_data.cache import file_sha256
+        man = tmp_path / f"{ck}.manifest.json"
+        entries = json.loads(man.read_text())
+        entries = entries if isinstance(entries, list) else [entries]
+        for e in entries:
+            e["data_sha256"] = file_sha256(nc)
+        man.write_text(json.dumps(entries))
+        monkeypatch.setattr(xr.Dataset, "close", _spy)
+        assert cache_read(ck) is None
+    assert closed, "legacy miss path did not close the dataset"

@@ -195,6 +195,7 @@ def cache_read(
                 log.info("Cache entry %s is a raster with no stored CRS (legacy) — treating as miss.", ck)
                 if miss_reasons is not None:
                     miss_reasons.append("cached raster has no stored CRS (written by an older version)")
+                ds.close()   # release the file handle (an open handle blocks the refetch rewrite on Windows)
                 return None
             if _stored:
                 data = data.rio.write_crs(_stored)
