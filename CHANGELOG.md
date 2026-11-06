@@ -3,6 +3,14 @@
 All notable changes to `aihydro-data` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed: the raster cache keeps the CRS (BREAKING-CACHE: legacy raster entries refetch once)
+
+- `cache_write` dropped rioxarray's `spatial_ref` coordinate before `to_netcdf` and stored nothing in its place, so every cache-served raster came back with `rio.crs is None` (a fresh fetch had EPSG:4326). Anything metric then had nothing to work from: aihydro-lsh's slope fails closed with `slope_unavailable:crs_unknown` on every cache hit. The CRS is now written as WKT in the variable attribute `aihydro_crs_wkt` (`""` = the raster explicitly has no CRS) and restored with `rio.write_crs` on read.
+- **Already-cached files without a CRS are a miss, never assumed.** A `.nc` entry without the attribute (written by any earlier version) cannot say what grid it is on, so `cache_read` returns None with the reason `cached raster has no stored CRS (written by an older version)` appended to `miss_reasons` (so it appears in `fallback_history`). The next fetch re-downloads it and writes the new form. No EPSG:4326 is guessed, even though the Earth Engine download did write 4326: other sources and the cache cannot be told apart from the file. Cost: one refetch per cached raster after upgrading. **Offline users lose their legacy-cached rasters until they reconnect**: a legacy entry is a miss, so with no network the fetch fails where the old cache would have served it. The file handle of a legacy entry is closed on the miss path (an open handle blocks the rewrite on Windows).
+- Tests: `tests/test_cache_raster_crs.py` (EPSG:4326, EPSG:32614 and EPSG:5070 round trips keep CRS, resolution and values; a raster with no CRS round-trips as no CRS; a legacy entry is a miss with a reason and its dataset is closed; the attribute is WKT).
+
 ## [0.2.6] — unreleased (2026-10-30)
 
 **Release note for installed users (tools 2.8.4 pins `aihydro-data<0.3` and will pick this up).** Earth Engine daily windows now
