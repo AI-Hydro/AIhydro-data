@@ -3,7 +3,9 @@
 All notable changes to `aihydro-data` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.2.7] - 2026-11-06
+
+Release note: legacy cached rasters without a stored CRS refetch once after upgrading (see Fixed below).
 
 ### Fixed: the raster cache keeps the CRS (BREAKING-CACHE: legacy raster entries refetch once)
 
@@ -11,7 +13,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Already-cached files without a CRS are a miss, never assumed.** A `.nc` entry without the attribute (written by any earlier version) cannot say what grid it is on, so `cache_read` returns None with the reason `cached raster has no stored CRS (written by an older version)` appended to `miss_reasons` (so it appears in `fallback_history`). The next fetch re-downloads it and writes the new form. No EPSG:4326 is guessed, even though the Earth Engine download did write 4326: other sources and the cache cannot be told apart from the file. Cost: one refetch per cached raster after upgrading. **Offline users lose their legacy-cached rasters until they reconnect**: a legacy entry is a miss, so with no network the fetch fails where the old cache would have served it. The file handle of a legacy entry is closed on the miss path (an open handle blocks the rewrite on Windows).
 - Tests: `tests/test_cache_raster_crs.py` (EPSG:4326, EPSG:32614 and EPSG:5070 round trips keep CRS, resolution and values; a raster with no CRS round-trips as no CRS; a legacy entry is a miss with a reason and its dataset is closed; the attribute is WKT).
 
-## [0.2.6] — unreleased (2026-10-30)
+### Added
+
+- `install-alone` CI workflow (AGU ecosystem audit C1, "independently usable"): builds the wheel, installs only it in a fresh venv outside
+  the checkout, and runs `scripts/install_alone_check.py` with every socket connection refused. Task:  list and describe data products through the `aihydro-data` CLI and the Python registry API. No code change; no version bump.
+
+## [0.2.6] — 2026-10-31
 
 **Release note for installed users (tools 2.8.4 pins `aihydro-data<0.3` and will pick this up).** Earth Engine daily windows now
 include the requested last day (one more row per request); `coverage_complete` is False for a daily product that misses its first
