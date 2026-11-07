@@ -3,6 +3,17 @@
 All notable changes to `aihydro-data` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+Next version: 0.2.9. Cached modelled-streamflow entries written before this change have an empty `site_resolution` until refetched.
+
+### Fixed
+
+- **Modelled streamflow now records which reach or cell served it.** The GEOGLOWS snap (`df.attrs["geoglows_snap"]`) and the Open-Meteo request (`df.attrs["openmeteo_cell"]`) were written and never read, so `site_resolution` was `{}` for every modelled source. Both backends now fill `aihydro_site_resolution`, which the pipeline already routes to `FetchResult.site_resolution`, the manifest, the cache and the MCP dict. GEOGLOWS: `method: "geoglows_reach"`, `river_id`, `nearest_reach`, `strategy`, `hops` (downstream steps from the nearest reach), `uparea_km2`, `strm_order`, `requested`, `target_area_km2`, `target_basis`, `area_ratio`. Open-Meteo: `method: "openmeteo_cell"`, `requested`, the `cell` the API served (`lat`, `lon`, `elevation`, previously discarded), `cell_selection`, `grid_deg`, `upstream_area_km2` (null: the API does not expose it), `target_area_km2`, `target_basis`, and a `plausibility` field.
+- **A bounding box is no longer a basin-area target.** An axis-aligned rectangle (what a bbox input is coerced to) made `outlet_and_area` return its area, which drove the GEOGLOWS area match (a 657 km2 reach for a 166.9 km2 basin) and the Open-Meteo guard. `outlet_and_area` now returns `area=None` for rectangles; an explicit basin polygon still sets the target. The result carries a note saying the bbox area was not used. New helpers `geometry.measures.is_bbox_like` / `area_basis`. (An explicit `basin_area_km2` input is not added in this change.)
+- **Open-Meteo cell plausibility is recorded, not silent.** Without a basin area the result notes "cell not validated against basin area"; with one it records the specific discharge and runoff depth and notes that no precipitation comparison was made; a mean runoff depth above 5 mm/day is flagged `OPENMETEO_OVER_YIELD` (a warning, never a refusal). The existing under-yield refusal (`OPENMETEO_CELL_MISS`) is unchanged. The over-yield cap does not catch the Nairobi case (2.85 mm/day against about 3 mm/day precipitation); that needs a precipitation comparison, which is not done here.
+- **GEOGLOWS reach/target area ratio outside 0.5-2 adds a note** (the 0.05 refusal and 0.30 warning are unchanged), and a snap with no area target says the reach area was not checked.
+
 ## [0.2.8] - 2026-11-07
 
 ### Fixed

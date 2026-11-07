@@ -45,6 +45,14 @@ _FLOOD_ENDPOINT = "https://flood-api.open-meteo.com/v1/flood"
 # Threshold = 1e-3 m³/s/km² (1 L/s/km²). Only applied when polygon area is known.
 _SPECIFIC_Q_FLOOR = 1e-3
 
+# Over-yield flag (warning only, never a refusal): a mean runoff depth above this
+# is beyond what almost any basin sustains (about 1.8 m/yr) and suggests the cell
+# is a larger river than the basin. The Nairobi case (2.85 mm/day on 166.9 km2,
+# runoff ratio near 1 against 3 mm/day precipitation) is BELOW this cap, so the cap
+# alone does not catch it; without precipitation only the area-free note applies.
+_RUNOFF_DEPTH_CAP_MM_DAY = 5.0
+_GRID_DEG = 0.05
+
 
 class Backend(SourceBackend):
     """Open-Meteo Global Flood (GloFAS v4) river-discharge backend (REST, no auth)."""
@@ -93,7 +101,9 @@ class Backend(SourceBackend):
         from aihydro_data.sources._retry import call_with_retry
 
         from aihydro_data.geometry.measures import outlet_and_area
-        lat, lon, area_km2 = outlet_and_area(geometry, outlet)  # area None for points
+        from aihydro_data.geometry.measures import BBOX_AREA_NOTE, area_basis
+        lat, lon, area_km2 = outlet_and_area(geometry, outlet)  # area None for points and bboxes
+        basis = area_basis(geometry)
         cfg = spec.backend_config
 
         params = {
@@ -154,8 +164,31 @@ class Backend(SourceBackend):
 
         from aihydro_data.sources._common import declare_units
         declare_units(df, (payload.get("daily_units") or {}).get("river_discharge"))
-        df.attrs["openmeteo_cell"] = {"lat": lat, "lon": lon,
-                                      "cell_selection": cfg.get("cell_selection", "nearest")}
+        cell_selection = cfg.get("cell_selection", "nearest")
+        df.attrs["openmeteo_cell"] = {"lat": lat, "lon": lon, "cell_selection": cell_selection}
+        # The cell actually served: the API echoes the grid-cell centre and its
+        # elevation, which can differ from the requested point by up to half a cell.
+        def _num(v):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+        notes: list[str] = []
+        if basis == "bbox":
+            notes.append(BBOX_AREA_NOTE)
+        site_res: dict[str, Any] = {
+            "method": "openmeteo_cell",
+            "requested": {"lat": lat, "lon": lon},
+            "cell": {"lat": _num(payload.get("latitude")), "lon": _num(payload.get("longitude")),
+                     "elevation": _num(payload.get("elevation"))},
+            "cell_selection": cell_selection,
+            "grid_deg": _GRID_DEG,
+            "upstream_area_km2": None,   # not exposed by the API
+            "target_area_km2": area_km2,
+            "target_basis": basis,
+        }
+        if site_res["cell"]["lat"] is None:
+            notes.append("Open-Meteo did not echo the served cell coordinates; the cell is unrecorded.")
 
         # Cell-miss detection: when a polygon basin is supplied, check whether the
         # returned mean discharge is plausible for that basin size. A GloFAS channel
@@ -188,6 +221,31 @@ class Backend(SourceBackend):
                 )
 
         mean_q_log = df["streamflow"].mean() if len(df) else float("nan")
+        # Plausibility record. Open-Meteo gives no upstream area for the cell, so the
+        # cell cannot be proved to drain this basin; say so rather than stay silent.
+        if area_km2 and len(df) > 0:
+            specific_q = float(mean_q_log) / area_km2
+            depth = specific_q * 86.4   # m3/s/km2 -> mm/day
+            site_res["specific_q_m3s_km2"] = specific_q
+            site_res["runoff_depth_mm_day"] = depth
+            if depth > _RUNOFF_DEPTH_CAP_MM_DAY:
+                site_res["plausibility"] = "over_yield"
+                notes.append(
+                    f"OPENMETEO_OVER_YIELD: mean Q={float(mean_q_log):.3f} m3/s on {area_km2:.1f} km2 "
+                    f"implies {depth:.1f} mm/day of runoff (> {_RUNOFF_DEPTH_CAP_MM_DAY:g}); the "
+                    f"0.05 degree cell probably drains a larger area than this basin.")
+            else:
+                site_res["plausibility"] = "not_validated_runoff_ratio"
+                notes.append(
+                    f"Open-Meteo cell not validated against the basin: it carries no upstream area, "
+                    f"and the implied runoff depth ({depth:.2f} mm/day on {area_km2:.1f} km2) was not "
+                    f"compared with precipitation. Compare with the basin's precipitation before use.")
+        else:
+            site_res["plausibility"] = "not_validated_no_area"
+            notes.append("Open-Meteo cell not validated against basin area (no basin polygon or "
+                         "area supplied); treat the series as the discharge of a 0.05 degree cell.")
+        df.attrs["aihydro_site_resolution"] = site_res
+        df.attrs["aihydro_notes"] = list(df.attrs.get("aihydro_notes", [])) + notes
         log.info(
             "Open-Meteo Flood (%.3f, %.3f) → %d days, mean Q=%.1f m³/s",
             lat, lon, len(df), mean_q_log,

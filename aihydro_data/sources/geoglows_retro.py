@@ -53,6 +53,11 @@ _REST_ENDPOINT = "https://geoglows.ecmwf.int/api/v2"
 # accepted-coverage trade-off on independent reaches and held-out basins.
 _SNAP_RATIO_FAIL = 0.05   # below this → definitely wrong reach → raise, force fallback
 _SNAP_RATIO_WARN = 0.30   # below this → suspicious → warn but return data
+# Recorded (as a note on the result) when the reach/target upstream-area ratio is outside
+# this band; the floor above still gates refusal. The upper side has no refusal: a
+# reach 4x the basin is served, so it must be said.
+_AREA_RATIO_NOTE_LO = 0.5
+_AREA_RATIO_NOTE_HI = 2.0
 
 
 class Backend(SourceBackend):
@@ -109,7 +114,9 @@ class Backend(SourceBackend):
         import geoglows
 
         from aihydro_data.geometry.measures import outlet_and_area
+        from aihydro_data.geometry.measures import BBOX_AREA_NOTE, area_basis
         outlet_lat, outlet_lon, target_area_km2 = outlet_and_area(geometry, outlet)
+        basis = area_basis(geometry)
         if outlet is not None:
             log.info("GEOGLOWS: using caller-supplied outlet (%.4f, %.4f) for snap.",
                      outlet_lat, outlet_lon)
@@ -180,6 +187,39 @@ class Backend(SourceBackend):
                 (df["date"] <= pd.Timestamp(end))].reset_index(drop=True)
 
         df.attrs["geoglows_snap"] = snap
+        notes: list[str] = []
+        if basis == "bbox":
+            notes.append(BBOX_AREA_NOTE)
+        ratio = None
+        if target_area_km2 and snap.get("uparea_km2"):
+            ratio = snap["uparea_km2"] / target_area_km2
+        site_res = {
+            "method": "geoglows_reach",
+            "river_id": snap["river_id"],
+            "nearest_reach": snap.get("nearest_reach", snap["river_id"]),
+            "strategy": snap["strategy"],
+            "hops": snap.get("hops", 0),
+            "uparea_km2": snap.get("uparea_km2"),
+            "strm_order": snap.get("strm_order"),
+            "requested": {"lat": outlet_lat, "lon": outlet_lon},
+            "target_area_km2": target_area_km2,
+            "target_basis": basis,
+            "area_ratio": ratio,
+        }
+        if ratio is None:
+            notes.append(
+                f"GEOGLOWS reach {snap['river_id']} chosen by "
+                f"{'nearest reach only' if snap['strategy'] == 'nearest_reach' else snap['strategy']} "
+                f"with no basin-area target; its upstream area "
+                f"({snap.get('uparea_km2') or 'unknown'} km2) is not checked against the basin.")
+        elif not (_AREA_RATIO_NOTE_LO <= ratio <= _AREA_RATIO_NOTE_HI):
+            notes.append(
+                f"GEOGLOWS reach {snap['river_id']} drains {snap['uparea_km2']:.0f} km2 vs a "
+                f"{target_area_km2:.0f} km2 target (ratio {ratio:.2f}); the series is for the reach, "
+                f"not the basin, and is outside the {_AREA_RATIO_NOTE_LO}-{_AREA_RATIO_NOTE_HI} "
+                f"agreement band.")
+        df.attrs["aihydro_site_resolution"] = site_res
+        df.attrs["aihydro_notes"] = list(df.attrs.get("aihydro_notes", [])) + notes
         # The zarr's own unit for the discharge variable. retro_daily's DataFrame
         # form drops variable attributes, so read them from the xarray form.
         from aihydro_data.sources._common import declare_units, payload_units
@@ -234,6 +274,7 @@ class Backend(SourceBackend):
                     "strm_order": best[1],
                     "strategy": "area_match_downstream",
                     "nearest_reach": rid,
+                    "hops": [c[0] for c in chain].index(best[0]),
                 }
         return snap
 
