@@ -182,6 +182,18 @@ def coerce_geometry(geom: Any) -> Any:
             docs_anchor="first_fetch",
         )
 
+    if isinstance(geom, dict) and {"west", "south", "east", "north"}.issubset(geom):
+        try:
+            w, so, e, n = (float(geom[k]) for k in ("west", "south", "east", "north"))
+        except (TypeError, ValueError):
+            raise GeometryInvalid(
+                code="GEOMETRY_INVALID_BBOX",
+                message="west/south/east/north geometry dict must contain numeric values.",
+                recovery="Pass {'west': .., 'south': .., 'east': .., 'north': ..} in decimal degrees.",
+                next_tools=["data_help"], docs_anchor="first_fetch",
+            )
+        return _box(w, so, e, n)
+
     if isinstance(geom, dict) and "type" in geom:
         try:
             if geom["type"] == "FeatureCollection":

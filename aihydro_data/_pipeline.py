@@ -127,7 +127,7 @@ class BatchResult(list):
 
 
 def _per_item(value: Any, name: str, ok_value: Callable[[Any], bool],
-              single_marker: str = "") -> Optional[Mapping[str, Any]]:
+              single_marker: str = "", n_geoms: int = 0) -> Optional[Mapping[str, Any]]:
     """Gauge identity for a collection must be an explicit ``{label: value}`` mapping: one id
     applied to many geometries would be wrong for all but one of them."""
     if value is None:
@@ -137,11 +137,26 @@ def _per_item(value: Any, name: str, ok_value: Callable[[Any], bool],
         from aihydro_data.exceptions import GeometryInvalid
         raise GeometryInvalid(
             code="GAUGE_WITH_COLLECTION",
-            message=f"{name}= identifies one gauge and cannot apply to several geometries.",
-            recovery=f"Pass {name} as a {{label: value}} mapping keyed like the geometries, or call fetch() once per geometry.",
+            message=(f"{name}= identifies one gauge and cannot apply to several geometries "
+                     f"(geometry was read as a collection of {n_geoms} entries)."),
+            recovery=(f"Pass {name} as a {{label: value}} mapping keyed like the geometries, or call fetch() once per geometry. "
+                      f"A single place is {{'lat': .., 'lon': ..}}, a [west, south, east, north] bbox, GeoJSON or WKT."),
             next_tools=["data_help"], docs_anchor="batch",
         )
     return dict(value)
+
+
+_COORD_DICT_KEYS = (frozenset({"lat", "lon"}), frozenset({"west", "south", "east", "north"}))
+
+
+def _is_single_coordinate_dict(geom: Mapping[str, Any]) -> bool:
+    """True for ``{"lat","lon"}`` / ``{"west","south","east","north"}`` with numeric values (one place, not a label mapping)."""
+    import numbers
+
+    return any(keys.issubset(geom) for keys in _COORD_DICT_KEYS) and all(
+        isinstance(geom[k], numbers.Real) and not isinstance(geom[k], bool)
+        for keys in _COORD_DICT_KEYS if keys.issubset(geom) for k in keys
+    )
 
 
 def _looks_like_collection(geom: Any) -> bool:
@@ -169,7 +184,13 @@ def _looks_like_collection(geom: Any) -> bool:
 
     # dict[label, geom]
     if isinstance(geom, dict) and "type" not in geom:
-        # Heuristic: GeoJSON dicts have a "type" key — skip those
+        # Heuristic: GeoJSON dicts have a "type" key — skip those. So are the two
+        # documented single-geometry dict forms, {"lat","lon"} and
+        # {"west","south","east","north"}: their values are numbers, not geometries,
+        # so reading them as a {label: geom} mapping fails inside the batch path
+        # ("Unsupported geometry input: float") and, with gauge_id=, as GAUGE_WITH_COLLECTION.
+        if _is_single_coordinate_dict(geom):
+            return False
         return len(geom) > 0
 
     # list / tuple
@@ -216,9 +237,12 @@ def fetch(
         fallback chain until one source succeeds.
 
     Manual mode:
-        Pin a specific product. Fallback chain still applies if you pass
-        `fallback=[...]`; pass `fallback=None` (default) to use the policy
-        default, or `fallback=[]` to disable fallbacks entirely.
+        Pin a specific product as the FIRST CHOICE. Fallbacks still apply in
+        Python: `fallback=None` (default) uses the policy chain, `fallback=[...]`
+        an explicit chain, `fallback=[]` makes the pin strict (the pinned
+        product serves or the call raises). When a fallback serves instead,
+        `result.product_substituted` is True and `result.requested_product`
+        names the pin. The MCP `data_fetch` tool is strict by default.
 
     Quality-gated fallback (`validate=`):
         Pass a callback `validate(result) -> bool`. After each candidate
@@ -309,9 +333,13 @@ def fetch(
                 recovery="Call fetch() once per geometry, each with its own outlet.",
                 next_tools=["data_help"], docs_anchor="batch",
             )
-        _gids = _per_item(gauge_id, "gauge_id", lambda v: isinstance(v, str))
+        try:
+            _n_geoms = len(geometry)
+        except TypeError:
+            _n_geoms = 0
+        _gids = _per_item(gauge_id, "gauge_id", lambda v: isinstance(v, str), n_geoms=_n_geoms)
         _brefs = _per_item(basin_ref, "basin_ref", lambda v: isinstance(v, Mapping),
-                           single_marker="aliases")
+                           single_marker="aliases", n_geoms=_n_geoms)
         batch = fetch_batch(
             variable, geometry, start, end,
             mode=mode, product=product, fallback=fallback,
@@ -545,7 +573,13 @@ def fetch(
                     })
             if accepted:
                 log.debug("Cache hit for %s (%s, product=%s).", ck, variable, cached.product)
-                return cached.model_copy(update={"geometry_id": geom_id})
+                _hit = {"geometry_id": geom_id}
+                if mode == "manual" and product and cached.product != product:
+                    _hit.update(requested_product=product, product_substituted=True,
+                                notes=list(cached.notes) + [
+                                    f"SUBSTITUTED PRODUCT: product={product!r} was requested but the "
+                                    f"cached result was served by {cached.product!r}."])
+                return cached.model_copy(update=_hit)
 
     # ── 5. Fetch with fallback chain ──────────────────────────────────────
     last_exc: Exception | None = None
@@ -582,8 +616,17 @@ def fetch(
             })
             _update = {"cache_key": ck, "fallback_history": history,
                        "geometry_id": geom_id}
-            if _pin_promoted:
+            if mode == "manual" and product and spec.id != product:
+                _update["requested_product"] = product
+                _update["product_substituted"] = True
                 _update["notes"] = list(result.notes) + [
+                    f"SUBSTITUTED PRODUCT: product={product!r} was requested but "
+                    f"{spec.id!r} served this result (see fallback_history for why "
+                    f"{product!r} did not). This is a different scientific product. "
+                    f"Pass fallback=[] to require the pinned product or fail."
+                ]
+            if _pin_promoted:
+                _update["notes"] = list(_update.get("notes", result.notes)) + [
                     f"product={product!r} was pinned without mode='manual'; the "
                     f"request was promoted to manual mode so the pin is honoured. "
                     f"Pass fallback=[] to make the pin strict."

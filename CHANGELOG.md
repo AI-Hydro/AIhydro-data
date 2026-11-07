@@ -3,6 +3,17 @@
 All notable changes to `aihydro-data` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **`{"lat","lon"}` (and `{"west","south","east","north"}`) geometry dicts were read as `{label: geometry}` collections.** `fetch()`'s collection auto-dispatch (`_looks_like_collection`) treated any dict without a `"type"` key as a label mapping, so the documented point form went to `fetch_batch`, which tried to coerce the floats (`GEOMETRY_UNSUPPORTED_TYPE`, "Unsupported geometry input: float"). With `gauge_id=` the same misreading raised `GAUGE_WITH_COLLECTION` for a single gauge, because the tool layer resolves a gauge to a `{"lat","lon"}` point. Both numeric-valued dict forms are now single geometries; `coerce_geometry` also accepts the bbox dict. `GAUGE_WITH_COLLECTION` now states how many entries the geometry was read as and names the single-place forms.
+- **A pinned product was silently replaced after it failed, with no top-level signal.** `mode="manual"` is a first choice in Python (policy fallbacks still run unless `fallback=[]`; documented in `fetch()`). `FetchResult` now carries `requested_product` and `product_substituted` (also in the MCP dict) plus a `SUBSTITUTED PRODUCT` note when a different product served, including on a cache hit. `help_topics/fallback.md` said `fallback=None` was strict; it is `fallback=[]`.
+
+### Changed
+
+- **The MCP `data_fetch` tool is strict for a pinned product.** `product=` / `mode="manual"` serves that product or fails with its error (the attempt trail records it). New optional `fallback=[...]` opts in to named fallbacks. Python `fetch()` keeps its documented fallback default.
+
 ## [0.2.7] - 2026-11-06
 
 Release note: legacy cached rasters without a stored CRS refetch once after upgrading (see Fixed below).

@@ -268,6 +268,13 @@ class FetchResult(BaseModel):
     # lets agents see *why* a particular backend was chosen, not just which one.
     fallback_history: list[dict[str, str]] = Field(default_factory=list)
 
+    # Pinned-product honesty: when the caller pinned a product (mode="manual") and a
+    # different one served it (the pin failed and a fallback ran), these say so at the
+    # top level. A fallback changes the scientific product identity, so it must not be
+    # discoverable only by reading `fallback_history`.
+    requested_product: str = ""
+    product_substituted: bool = False
+
     def help(self) -> str:
         """REPL convenience: return a short usage summary for this result."""
         return (

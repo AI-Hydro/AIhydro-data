@@ -123,6 +123,8 @@ def _result_to_dict(result: Any) -> dict[str, Any]:
         "days_missing_internal": getattr(result, "days_missing_internal", None),
         "missing_ranges": getattr(result, "missing_ranges", None),
         "fallback_history": getattr(result, "fallback_history", []),
+        "requested_product": getattr(result, "requested_product", ""),
+        "product_substituted": getattr(result, "product_substituted", False),
         "cache_hit": result.cache_hit,
         "cache_key": result.cache_key,
         "fetched_at": result.fetched_at,
@@ -211,6 +213,7 @@ def _data_fetch(
     cache: bool = True,
     region: str | None = None,
     outlet: tuple[float, float] | None = None,
+    fallback: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Fetch a single hydrology variable for one geometry / time window.
@@ -226,13 +229,18 @@ def _data_fetch(
         start:       ISO-8601 start date, e.g. '2015-01-01'.
         end:         ISO-8601 end date (inclusive), e.g. '2015-12-31'.
         mode:        'auto' (router picks best product for the region) or
-                     'manual' (must also supply product=).
+                     'manual' (must also supply product=). Manual is STRICT here:
+                     the pinned product serves or the call fails with its error
+                     (the attempt trail records it); no other product is substituted.
         product:     Product ID, e.g. 'CHIRPS', 'GRIDMET_PRECIP'. Required if
                      mode='manual'; ignored otherwise.
         aggregation: How to aggregate the raster over the geometry.
                      'basin_mean' (default) → 1-D time series.
                      'raw_raster' → full clipped xarray.DataArray.
         cache:       True (default) — read from / write to disk cache.
+        fallback:    Manual mode only. Explicit product IDs to try if the pinned one
+                     fails (opt-in). When one serves, the result carries
+                     product_substituted=True and requested_product.
 
     Returns:
         On success: result dict with keys variable, product, source, cache_hit,
@@ -290,6 +298,8 @@ def _data_fetch(
         end=end,
         mode=mode,  # type: ignore[arg-type]
         product=product,
+        # A pin is strict over MCP unless the caller opts in to named fallbacks.
+        fallback=list(fallback) if fallback is not None else ([] if product else None),
         aggregation=aggregation,  # type: ignore[arg-type]
         cache=cache,
         region=region,
