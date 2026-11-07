@@ -7,7 +7,7 @@ into a single canonical shapely geometry in WGS84.
 """
 from __future__ import annotations
 
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
 import re
 
@@ -111,6 +111,70 @@ def geometry_id(geom: Any) -> str:
         ) from exc
 
 
+_POINT_KEYS = frozenset({"lat", "lon"})
+_BBOX_KEYS = frozenset({"west", "south", "east", "north"})
+
+
+def _is_number(v: Any) -> bool:
+    """The one numeric predicate for coordinate values: a real number (numpy scalars included), not a bool."""
+    import numbers
+
+    return isinstance(v, numbers.Real) and not isinstance(v, bool)
+
+
+def _bad_coords(message: str):
+    from aihydro_data.exceptions import GeometryInvalid
+
+    return GeometryInvalid(
+        code="GEOMETRY_INVALID_COORDINATES",
+        message=message,
+        recovery=("Pass exactly {'lat': <-90..90>, 'lon': <-180..180>} for a point or exactly "
+                  "{'west','south','east','north'} (west<east, south<north) for a box, with numeric values."),
+        next_tools=["data_help"], docs_anchor="first_fetch",
+    )
+
+
+def coordinate_dict_kind(d: Any) -> Optional[str]:
+    """``"point"`` / ``"bbox"`` for a valid coordinate dict, ``None`` when ``d`` is not a coordinate dict
+    (e.g. a ``{label: geometry}`` mapping or GeoJSON); raises GEOMETRY_INVALID_COORDINATES for a dict that
+    is clearly one but malformed: extra keys, a lat/lon + bbox mix, a missing half, non-numeric / non-finite
+    / out-of-range values, west>=east or south>=north."""
+    import math
+
+    if not isinstance(d, dict) or "type" in d:
+        return None
+    named = [k for k in d if k in _POINT_KEYS | _BBOX_KEYS]
+    # Label mappings may use any label, even "lat"; they are told apart by their values being geometries.
+    if not named or not any(
+        not (hasattr(d[k], "geom_type") or hasattr(d[k], "geometry") or isinstance(d[k], (dict, list, tuple)))
+        for k in named
+    ):
+        return None
+    keys = set(d)
+    if keys == _POINT_KEYS:
+        kind = "point"
+    elif keys == _BBOX_KEYS:
+        kind = "bbox"
+    else:
+        raise _bad_coords(
+            f"geometry dict has keys {sorted(keys)}; expected exactly {sorted(_POINT_KEYS)} or {sorted(_BBOX_KEYS)} "
+            f"(no extra keys, no mixing, no missing half).")
+    for k in keys:
+        v = d[k]
+        if not _is_number(v) or not math.isfinite(float(v)):
+            raise _bad_coords(f"{k}={v!r} ({type(v).__name__}) is not a finite number.")
+    lat_keys, lon_keys = (("lat",), ("lon",)) if kind == "point" else (("south", "north"), ("west", "east"))
+    for k in lat_keys:
+        if abs(float(d[k])) > 90:
+            raise _bad_coords(f"{k}={d[k]} is outside latitude range +/-90.")
+    for k in lon_keys:
+        if abs(float(d[k])) > 180:
+            raise _bad_coords(f"{k}={d[k]} is outside longitude range +/-180.")
+    if kind == "bbox" and not (float(d["west"]) < float(d["east"]) and float(d["south"]) < float(d["north"])):
+        raise _bad_coords(f"bbox needs west<east and south<north, got {dict(d)}.")
+    return kind
+
+
 def coerce_geometry(geom: Any) -> Any:
     """
     Return a shapely geometry in EPSG:4326 from a variety of inputs:
@@ -169,30 +233,11 @@ def coerce_geometry(geom: Any) -> Any:
     if isinstance(geom, GaugeID):
         return geom
 
-    if isinstance(geom, dict) and {"lat", "lon"}.issubset(geom):
-        lat = geom["lat"]
-        lon = geom["lon"]
-        if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
-            return _Point(lon, lat)
-        raise GeometryInvalid(
-            code="GEOMETRY_INVALID_LAT_LON",
-            message="lat/lon geometry dict must contain numeric 'lat' and 'lon' values.",
-            recovery="Pass {'lat': 45.175, 'lon': -69.3147}, [lat, lon], or a GeoJSON Point.",
-            next_tools=["data_help"],
-            docs_anchor="first_fetch",
-        )
-
-    if isinstance(geom, dict) and {"west", "south", "east", "north"}.issubset(geom):
-        try:
-            w, so, e, n = (float(geom[k]) for k in ("west", "south", "east", "north"))
-        except (TypeError, ValueError):
-            raise GeometryInvalid(
-                code="GEOMETRY_INVALID_BBOX",
-                message="west/south/east/north geometry dict must contain numeric values.",
-                recovery="Pass {'west': .., 'south': .., 'east': .., 'north': ..} in decimal degrees.",
-                next_tools=["data_help"], docs_anchor="first_fetch",
-            )
-        return _box(w, so, e, n)
+    _kind = coordinate_dict_kind(geom)
+    if _kind == "point":
+        return _Point(float(geom["lon"]), float(geom["lat"]))
+    if _kind == "bbox":
+        return _box(float(geom["west"]), float(geom["south"]), float(geom["east"]), float(geom["north"]))
 
     if isinstance(geom, dict) and "type" in geom:
         try:
@@ -212,6 +257,8 @@ def coerce_geometry(geom: Any) -> Any:
         if len(geom) == 2 and all(isinstance(v, (int, float)) for v in geom):
             # (lat, lon) tuple — order intentional: human-readable
             lat, lon = geom
+            if abs(lat) > 90 or abs(lon) > 180:
+                raise _bad_coords(f"(lat, lon)=({lat}, {lon}) is outside +/-90 / +/-180.")
             return _Point(lon, lat)
         if len(geom) == 4 and all(isinstance(v, (int, float)) for v in geom):
             return _box(*geom)  # (minx, miny, maxx, maxy)

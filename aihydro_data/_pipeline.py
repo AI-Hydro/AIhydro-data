@@ -146,19 +146,6 @@ def _per_item(value: Any, name: str, ok_value: Callable[[Any], bool],
     return dict(value)
 
 
-_COORD_DICT_KEYS = (frozenset({"lat", "lon"}), frozenset({"west", "south", "east", "north"}))
-
-
-def _is_single_coordinate_dict(geom: Mapping[str, Any]) -> bool:
-    """True for ``{"lat","lon"}`` / ``{"west","south","east","north"}`` with numeric values (one place, not a label mapping)."""
-    import numbers
-
-    return any(keys.issubset(geom) for keys in _COORD_DICT_KEYS) and all(
-        isinstance(geom[k], numbers.Real) and not isinstance(geom[k], bool)
-        for keys in _COORD_DICT_KEYS if keys.issubset(geom) for k in keys
-    )
-
-
 def _looks_like_collection(geom: Any) -> bool:
     """
     Detect "user passed multiple geometries" so fetch() can auto-dispatch
@@ -189,7 +176,9 @@ def _looks_like_collection(geom: Any) -> bool:
         # {"west","south","east","north"}: their values are numbers, not geometries,
         # so reading them as a {label: geom} mapping fails inside the batch path
         # ("Unsupported geometry input: float") and, with gauge_id=, as GAUGE_WITH_COLLECTION.
-        if _is_single_coordinate_dict(geom):
+        from aihydro_data.geometry import coordinate_dict_kind
+
+        if coordinate_dict_kind(geom) is not None:      # one place; a malformed one raises a clear GEOMETRY_INVALID_COORDINATES
             return False
         return len(geom) > 0
 

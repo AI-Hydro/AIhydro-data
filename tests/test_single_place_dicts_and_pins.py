@@ -44,7 +44,7 @@ def test_coerce_point_and_bbox_dicts():
     assert coerce_geometry(BBOX).bounds == (-69.40, 45.10, -69.20, 45.25)
     with pytest.raises(GeometryInvalid) as e:
         coerce_geometry({**BBOX, "west": "x"})
-    assert e.value.code == "GEOMETRY_INVALID_BBOX"
+    assert e.value.code == "GEOMETRY_INVALID_COORDINATES"
 
 
 def test_fetch_accepts_the_lat_lon_dict_end_to_end():
@@ -117,3 +117,69 @@ def test_mcp_data_fetch_pin_is_strict_by_default_and_opt_in_fallback_is_flagged(
     assert [h["product"] for h in strict["details"]["fallback_history"]] == ["GRIDMET_PRECIP"] if "details" in strict else True
     assert opt_in["product"] == "DAYMET_PRECIP"
     assert opt_in["product_substituted"] is True and opt_in["requested_product"] == "GRIDMET_PRECIP"
+
+
+# ------------------------------------------------------------------ malformed coordinate dicts (clear errors)
+@pytest.mark.parametrize("bad", [
+    {"lat": 45.0},                                              # missing half
+    {"lon": -69.0},
+    {"lat": 45.0, "lon": -69.0, "elevation": 10},               # extra key
+    {"lat": 45.0, "lon": -69.0, "west": -70.0},                 # point + bbox mix
+    {**BBOX, "lat": 45.0},
+    {"west": -69.4, "south": 45.1, "east": -69.2},              # partial bbox
+    {"lat": "45.0", "lon": "-69.0"},                            # numeric strings
+    {"lat": None, "lon": -69.0},
+    {"lat": True, "lon": -69.0},
+    {"lat": float("nan"), "lon": -69.0},
+    {"lat": 91.0, "lon": -69.0},
+    {"lat": 45.0, "lon": -181.0},
+    {**BBOX, "west": -69.0, "east": -70.0},                     # west >= east
+    {**BBOX, "south": 46.0},                                    # south >= north
+])
+def test_malformed_coordinate_dicts_raise_a_clear_error(bad):
+    with pytest.raises(GeometryInvalid) as e:
+        coerce_geometry(bad)
+    assert e.value.code == "GEOMETRY_INVALID_COORDINATES"
+    assert _safe_collection(bad) == "raises"                    # fetch()'s dispatch reports the same error, not a batch failure
+
+
+def _safe_collection(g):
+    try:
+        _looks_like_collection(g)
+    except GeometryInvalid as e:
+        return "raises" if e.code == "GEOMETRY_INVALID_COORDINATES" else "other"
+    return "no-raise"
+
+
+def test_numpy_scalars_are_coordinates():
+    import numpy as np
+
+    p = coerce_geometry({"lat": np.float32(45.5), "lon": np.float64(-69.5)})
+    assert (p.x, p.y) == (-69.5, 45.5)
+    assert _looks_like_collection({"lat": np.float32(45.5), "lon": np.float32(-69.5)}) is False
+
+
+def test_lat_lon_tuple_is_range_checked():
+    with pytest.raises(GeometryInvalid) as e:
+        coerce_geometry((100.0, -69.0))
+    assert e.value.code == "GEOMETRY_INVALID_COORDINATES"
+
+
+# ------------------------------------------------------------------ cache hit under a pinned key
+def test_cache_hit_of_a_fallback_served_entry_is_flagged(tmp_path, monkeypatch):
+    from aihydro_data import cache
+
+    monkeypatch.setattr(cache, "cache_dir", lambda: tmp_path)
+    kw = dict(mode="manual", product="GRIDMET_PRECIP")
+    with patch("aihydro_data._pipeline._fetch_one", side_effect=_fail_pinned_then_serve("GRIDMET_PRECIP")):
+        first = fetch("precipitation", Point(-69.3, 45.2), "2020-06-01", "2020-06-03", **kw)
+    assert first.product_substituted and first.cache_hit is False
+
+    def _no_network(*a, **k):
+        pytest.fail("cache miss: backend called")
+
+    with patch("aihydro_data._pipeline._fetch_one", side_effect=_no_network):
+        hit = fetch("precipitation", Point(-69.3, 45.2), "2020-06-01", "2020-06-03", **kw)
+    assert hit.cache_hit is True and hit.product == first.product
+    assert hit.product_substituted is True and hit.requested_product == "GRIDMET_PRECIP"
+    assert any("SUBSTITUTED PRODUCT" in n for n in hit.notes)
