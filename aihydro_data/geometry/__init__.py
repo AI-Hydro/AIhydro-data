@@ -171,7 +171,8 @@ def coordinate_dict_kind(d: Any) -> Optional[str]:
         if abs(float(d[k])) > 180:
             raise _bad_coords(f"{k}={d[k]} is outside longitude range +/-180.")
     if kind == "bbox" and not (float(d["west"]) < float(d["east"]) and float(d["south"]) < float(d["north"])):
-        raise _bad_coords(f"bbox needs west<east and south<north, got {dict(d)}.")
+        raise _bad_coords(f"bbox needs west<east and south<north, got {dict(d)}. A box crossing the antimeridian "
+                          "(west>east) is not supported: split it in two or pass GeoJSON.")
     return kind
 
 
