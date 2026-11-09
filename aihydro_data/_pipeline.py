@@ -517,12 +517,12 @@ def fetch(
         if _is_bbox_like(geom):
             key_payload["modelled_site_identity"] = 2
     if any(s.source == "stac" and s.timestep == "static" for s in candidate_specs):
-        # Static STAC mosaic (0.2.9): static tiled products (GLO30_STAC, GLO30_ELEMENT84,
+        # Static STAC mosaic (0.2.9; 3 = native-grid output): static tiled products (GLO30_STAC, GLO30_ELEMENT84,
         # ESA_WORLDCOVER_STAC) kept only the first tile (`isel(time=0)`), so every other
         # tile was NaN. Entries cached under the old code may hold those holes; the marker
         # makes them miss. Only requests whose candidate chain contains such a product are
         # re-keyed, so every other variable/product keeps its key unchanged.
-        key_payload["stac_static_mosaic"] = 2
+        key_payload["stac_static_mosaic"] = 3
     if mode == "manual" and product:
         key_payload["product"] = product
     if index:
