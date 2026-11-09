@@ -239,3 +239,62 @@ def test_basin_mean_flags_partial_and_refuses_sliver(tmp_path, monkeypatch):
     with pytest.raises(SourceUnavailable) as ei:
         be.fetch_timeseries(spec, sliver, "2020-01-01", "2020-01-02", "basin_mean")
     assert ei.value.code == "STAC_LOW_COVERAGE"
+
+
+# ── follow-ups: fallback grid, memory guard, WorldCover metadata shape ────────
+
+def test_item_grid_reads_asset_level_transform_without_proj_epsg():
+    """PC WorldCover items: transform on the asset, `proj:code` and no `proj:epsg`, datetime null."""
+    it = pystac.Item(id="ESA_WorldCover_10m_2021_v200_N39W078", geometry=None, bbox=[-78, 39, -75, 42],
+                     datetime=None, properties={"proj:code": "EPSG:4326", "start_datetime": "2021-01-01T00:00:00Z",
+                                 "end_datetime": "2021-12-31T23:59:59Z"})
+    it.add_asset("map", pystac.Asset(href="file:///x.tif", extra_fields={
+        "proj:shape": [36000, 36000],
+        "proj:transform": [8.333333333333333e-05, 0.0, -78.0, 0.0, -8.333333333333333e-05, 42.0]}))
+    from aihydro_data.sources.stac import _item_epoch, _item_grid
+    g = _item_grid(it, "map")
+    assert g == {"xres": pytest.approx(1 / 12000), "yres": pytest.approx(1 / 12000), "x0": -78.0, "y0": 42.0}
+    assert _item_epoch(it) == "2021-01-01T00:00:00Z"
+
+
+def test_fallback_grid_without_proj_transform_is_per_axis_and_not_lattice_snapped():
+    """Items with no proj:transform: configured resolution per axis, stackstac default snap
+    (so this path keeps the half-pixel offset) and an explicit note."""
+    from aihydro_data.sources.stac import _static_stack_kwargs
+    bare = [SimpleNamespace(id="a", datetime="2021-04-22", properties={}, assets={})]
+    kw, info, notes = _static_stack_kwargs(bare, "data", [7.95, 46.40, 8.05, 46.50], 30, 4326, False)
+    xres, yres = kw["resolution"]
+    assert yres == pytest.approx(30 / 111_320) and xres > yres          # separate axes, lon wider in deg
+    assert kw["snap_bounds"] is True and info["grid_source"] == "configured_resolution"
+    assert any("Native grid not read from the items" in n and "not lattice-snapped" in n for n in notes)
+    assert kw["dtype"] == "float32" and kw["xy_coords"] == "center"      # dtype/centres still apply
+
+
+def test_size_guard_counts_slices_when_several_epochs_are_held():
+    from aihydro_data.exceptions import FetchTooLarge
+    from aihydro_data.sources.stac import _check_output_size
+    info = {"nx": 1000, "ny": 1000, "itemsize": 4}                      # 4 MB output
+    cfg = {"stac_max_output_bytes": 10_000_000}
+    _check_output_size(dict(info), cfg, "c", [0, 0, 1, 1], n_slices=1)  # 4 MB: fine
+    _check_output_size(dict(info), cfg, "c", [0, 0, 1, 1], n_slices=2)  # 8 MB: fine
+    with pytest.raises(FetchTooLarge) as ei:
+        _check_output_size(dict(info), cfg, "c", [0, 0, 1, 1], n_slices=3)   # 12 MB
+    assert "3 epoch slices" in ei.value.message
+    assert "fetch() has no argument" in ei.value.recovery
+
+
+def test_multi_epoch_fetch_hits_the_slice_aware_guard(tmp_path, monkeypatch):
+    from aihydro_data.exceptions import FetchTooLarge
+    base = _seam_items(tmp_path)
+    old = [pystac.Item.from_dict(i.to_dict()) for i in base]
+    for i in old:
+        i.id += "_old"
+        i.datetime = dt.datetime(2020, 4, 22)
+    spec = get_product("GLO30_STAC")
+    out = 360 * 361 * 4
+    one = spec.model_copy(update={"backend_config": {**spec.backend_config, "stac_max_output_bytes": out * 2}})
+    # single epoch (2 tiles, 1 datetime): 1 slice of ~0.5 MB passes the 1 MB cap
+    _backend(monkeypatch, base).fetch_raster(one, _geom(SEAM_BBOX), "", "")
+    # two epochs, 4 slices -> 4 x output > cap: refused before any read
+    with pytest.raises(FetchTooLarge):
+        _backend(monkeypatch, base + old).fetch_raster(one, _geom(SEAM_BBOX), "", "")
