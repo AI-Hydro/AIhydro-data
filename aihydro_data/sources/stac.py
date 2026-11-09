@@ -180,20 +180,33 @@ def _static_stack_kwargs(
     return kwargs, info, notes
 
 
-def _check_output_size(info: dict[str, Any], cfg: dict, collection: str, bbox: list) -> None:
+def _check_output_size(
+    info: dict[str, Any], cfg: dict, collection: str, bbox: list, n_slices: int = 1,
+) -> None:
+    """Refuse an over-size static fetch. ``n_slices`` is the number of cube slices held in
+    memory at once: 1 for a single-epoch product (mosaicked lazily), the item count when more
+    than one epoch is present (the whole cube is computed to attribute pixels to epochs)."""
     cap = int(cfg.get("stac_max_output_bytes", _STATIC_MAX_OUTPUT_BYTES))
-    nbytes = info["nx"] * info["ny"] * info["itemsize"]
-    info["output_bytes"] = nbytes
+    out_bytes = info["nx"] * info["ny"] * info["itemsize"]
+    nbytes = out_bytes * max(1, n_slices)
+    info["output_bytes"] = out_bytes
+    info["peak_bytes"] = nbytes
     if nbytes > cap:
         from aihydro_data.exceptions import FetchTooLarge
+        held = f" x {n_slices} epoch slices held in memory" if n_slices > 1 else ""
         raise FetchTooLarge(
             code="STAC_OUTPUT_TOO_LARGE",
             message=(
                 f"{collection} bbox={bbox} would be {info['nx']} x {info['ny']} pixels "
-                f"({nbytes / 1e9:.2f} GB) on the native grid; the cap is {cap / 1e9:.2f} GB. "
-                f"A DEM is not coarsened silently (it changes slope and flow paths)."
+                f"({out_bytes / 1e9:.2f} GB{held} = {nbytes / 1e9:.2f} GB) on the native grid; "
+                f"the cap is {cap / 1e9:.2f} GB. A DEM is not coarsened silently (it changes "
+                f"slope and flow paths)."
             ),
-            recovery="Fetch a smaller area (split the basin into tiles) or raise backend_config['stac_max_output_bytes'].",
+            recovery=(
+                "Request a smaller area (split the basin into sub-boxes and fetch each). "
+                "fetch() has no argument for the cap; Python callers using the STAC backend "
+                "directly can pass a spec whose backend_config sets 'stac_max_output_bytes'."
+            ),
             next_tools=["data_validate_request"],
             docs_anchor="stac#size",
         )
@@ -237,6 +250,15 @@ def _mosaic_static(cube: Any, nodata: Any = np.nan) -> Any:
 _STATIC_NAN_WARN_FRACTION = 0.01
 
 
+def _item_epoch(item: Any) -> str:
+    """Epoch label of an item: ``datetime``, else ``start_datetime`` (ESA WorldCover items on
+    Planetary Computer have ``datetime: null`` and only ``start_datetime``), else ""."""
+    dtm = getattr(item, "datetime", None)
+    if not dtm:
+        dtm = (getattr(item, "properties", None) or {}).get("start_datetime")
+    return str(dtm or "")
+
+
 def _is_valid(arr: Any, nodata: Any) -> Any:
     """Boolean mask of valid pixels (NaN-aware when ``nodata`` is NaN)."""
     return ~np.isnan(arr) if (isinstance(nodata, float) and np.isnan(nodata)) else (arr != nodata)
@@ -252,20 +274,22 @@ def _static_mosaic_with_provenance(
     belongs to the newest epoch that has a valid value there, and the flag fires only if
     an older epoch owns at least one pixel. Gap-fill pixels are not marked per pixel.
     """
-    times = np.asarray(cube["time"].values)
-    n_epochs = len(set(times.tolist()))
+    # Epochs come from the items (cube slices are in the items' order), not from the cube's
+    # time coordinate: WorldCover items have datetime null, so stackstac's time is NaT.
+    epochs = [_item_epoch(it) for it in items]
+    n_epochs = len(set(epochs))
     epochs_used: list[str] = []
     if n_epochs > 1:
         cube = cube.compute()                       # need slices to attribute pixels
         valid = _is_valid(np.asarray(cube), nodata)         # (time, y, x) after band drop
         claimed = np.zeros(valid.shape[1:], dtype=bool)
         owners: set = set()
-        for i in range(len(times) - 1, -1, -1):     # newest slice first
+        for i in range(len(epochs) - 1, -1, -1):    # newest slice first
             take = valid[i] & ~claimed
             if take.any():
-                owners.add(times[i])
+                owners.add(epochs[i])
             claimed |= valid[i]
-        epochs_used = [str(np.datetime64(t, "D")) for t in sorted(owners)]
+        epochs_used = [e[:10] for e in sorted(owners)]
     mosaic = _mosaic_static(cube, nodata).compute()
     nan_frac = float((~_is_valid(np.asarray(mosaic), nodata)).mean())
 
@@ -292,7 +316,7 @@ def _static_mosaic_with_provenance(
         "method": "stac_static_mosaic",
         "collection": collection,
         "items": [
-            {"id": str(getattr(it, "id", "")), "datetime": str(getattr(it, "datetime", None) or "")}
+            {"id": str(getattr(it, "id", "")), "datetime": _item_epoch(it)}
             for it in items
         ],
         "overlap_rule": "last item on top after sort by (datetime, id); newest epoch wins",
@@ -317,6 +341,15 @@ def _basin_mean(raster: Any, geometry: Any, cfg: dict) -> tuple[float, dict[str,
     contains no pixel centre). A non-areal geometry (point) takes the nearest pixel. The
     categorical nodata value (0) is excluded like NaN. ``basin_coverage_fraction`` is the
     share of the basin's pixels holding a valid value.
+
+    The mean is an unweighted cell mean in EPSG:4326: cell area varies with cos(lat) by about
+    +-0.6 % across 1 degree of latitude, negligible for elevation but not an area-weighted
+    mean. ``geometry`` must be in EPSG:4326 (the raster's CRS); it is not reprojected here.
+
+    Reachability: ``fetch()`` promotes every static product to ``raw_raster`` (see
+    ``_pipeline._fetch_one``), so it does not call this; only a direct call of
+    ``Backend.fetch_timeseries`` reaches it, and with it ``STAC_LOW_COVERAGE``. A holed DEM
+    served through ``fetch()`` carries the ``STATIC_MOSAIC_NAN`` note instead.
     """
     categorical = bool(cfg.get("categorical", False))
     arr = raster
@@ -429,7 +462,10 @@ class Backend(SourceBackend):
         Fetch a STAC collection and reduce to a time series at the geometry's
         location / area.
 
-        Static products (timestep='static') return a 1-row DataFrame.
+        Static products (timestep='static') return a 1-row DataFrame: a NaN-aware mean over
+        the basin polygon, with coverage in ``attrs['aihydro_quality']``. Note that ``fetch()``
+        never reaches this path for static products (it promotes them to ``raw_raster``); it is
+        used by direct callers of this backend only.
         """
         self._assert_available()
         raster = self.fetch_raster(spec, geometry, start, end)
@@ -566,15 +602,20 @@ class Backend(SourceBackend):
         stack_kwargs: dict[str, Any]
         grid_info: dict[str, Any] = {}
         if is_static:
-            # Deterministic overlap rule: stackstac sorts by datetime only, and every
-            # tile of a static product usually shares one datetime, so break ties by id.
+            # Deterministic overlap rule: stackstac sorts by datetime only (NaT for
+            # WorldCover) and the tiles of a product usually share one, so sort here, break ties
+            # by id, and stack with sortby_date=False so the cube keeps this order.
             sign_items = sorted(
-                sign_items, key=lambda it: (str(getattr(it, "datetime", None) or ""), str(getattr(it, "id", "")))
+                sign_items, key=lambda it: (_item_epoch(it), str(getattr(it, "id", "")))
             )
             stack_kwargs, grid_info, grid_notes = _static_stack_kwargs(
                 sign_items, asset, bbox, resolution, stack_epsg, categorical,
             )
-            _check_output_size(grid_info, cfg, collection, bbox)
+            stack_kwargs["sortby_date"] = False
+            _check_output_size(
+                grid_info, cfg, collection, bbox,
+                n_slices=len(sign_items) if len({_item_epoch(i) for i in sign_items}) > 1 else 1,
+            )
             if native_resolution:
                 grid_notes.append(
                     "native_resolution=True: honoured, static STAC products are always served "

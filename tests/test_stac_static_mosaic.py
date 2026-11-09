@@ -244,3 +244,15 @@ def test_nan_warning_fires_on_missing_tile_but_does_not_fail(monkeypatch):
     assert "STATIC_MOSAIC_NAN" in res.site_resolution["flags"]
     assert any("STATIC_MOSAIC_NAN" in n and "heuristic" in n for n in res.notes)
     assert res.data is not None
+
+
+def test_mixed_epoch_flag_uses_start_datetime_when_datetime_is_null(monkeypatch):
+    """PC WorldCover items have datetime null (stackstac time = NaT); epochs come from start_datetime."""
+    cube = _tile_cube([("wc2020", slice(0, 8), 10), ("wc2021", slice(0, 6), 20)],
+                      times=np.array(["NaT", "NaT"], dtype="datetime64[ns]"), fill=0, dtype="uint8")
+    items = [SimpleNamespace(id="wc2021", datetime=None, properties={"start_datetime": "2021-01-01T00:00:00Z"}),
+             SimpleNamespace(id="wc2020", datetime=None, properties={"start_datetime": "2020-01-01T00:00:00Z"})]
+    res = _fetch(monkeypatch, "ESA_WORLDCOVER_STAC", "landcover", cube, items, cache=False)
+    assert [i["datetime"][:4] for i in res.site_resolution["items"]] == ["2020", "2021"]
+    assert "WORLDCOVER_MIXED_EPOCHS" in res.site_resolution["flags"]
+    assert res.site_resolution["epochs_contributing"] == ["2020-01-01", "2021-01-01"]
