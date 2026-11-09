@@ -118,16 +118,19 @@ PRODUCTS: list[ProductSpec] = [
             "MODELLED, not observed — ECMWF IFS reanalysis routed through RAPID on the "
             "TDX-Hydro network. Never present it as gauge truth; provenance must say modelled.",
             "ALWAYS supply a delineated basin polygon, not a bare point. Validated against "
-            "5 NWIS gauges (2019): bare-point snaps that landed on a tributary (snap area "
-            "< 5 % of target) produced NSE < -1 and Pbias < -99 %. Correct snaps (ratio "
-            "≈ 1.0) achieved NSE 0.37–0.47, KGE 0.38–0.50. Use delineate_watershed_from_point "
+            "5 NWIS gauges (2019; a spot check, not a benchmark): bare-point snaps that landed "
+            "on a tributary (snap area < 5 % of target) produced NSE < -1 and Pbias < -99 %. "
+            "Correct snaps (ratio ≈ 1.0) achieved NSE 0.37–0.47 (two medium basins: Neuse, "
+            "Little Miami), KGE 0.38–0.50. Use delineate_watershed_from_point "
             "upstream of every global streamflow fetch.",
             "Snap-quality guard: if the snapped upstream area is < 5 % of the basin polygon "
             "area (ratio < 0.05), the backend raises GEOGLOWS_SNAP_MISMATCH and forces the "
             "fallback chain. Ratios 0.05–0.30 emit a warning; > 0.30 proceed silently.",
-            "Typical performance on medium-large basins (1,000–1,000,000 km²) with correct "
-            "snapping: NSE 0.37–0.47, KGE 0.38–0.50, r 0.63–0.76, dry bias −13 to −32 %. "
-            "Published global median KGE ≈ 0.36 (Qiao et al. 2024, GEOGLOWS v2).",
+            "Observed in a 5-gauge CONUS spot check (2019 data, 2026-06-04; not a benchmark, "
+            "no published global skill figure is quoted here) for correctly snapped "
+            "medium-large basins (1,000–1,000,000 km²): KGE 0.38–0.50, r 0.63–0.76, dry bias "
+            "−13 to −32 %. NSE 0.37–0.47 comes from only the two medium basins "
+            "(Neuse, Little Miami); the third, Missouri, had NSE −0.26.",
             "Small basins (< 500 km²) are marginal even with correct snapping — the IFS-RAPID "
             "network may not resolve the channel. Do not expect NSE > 0.4 below 500 km².",
             "First call downloads the ~1M-reach model metadata table once (cached to disk); "
