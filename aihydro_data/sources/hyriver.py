@@ -600,5 +600,20 @@ class Backend(SourceBackend):
 
         import geopandas as gpd
         gdf = gpd.GeoDataFrame(geometry=[geometry], crs="EPSG:4326")
-        dem = py3dep.get_map(product, gdf.geometry.iloc[0], resolution=resolution, crs="EPSG:4326")
-        return dem
+        # py3dep warns that crs=4326 "returns invalid data" (a USGS server issue)
+        # and recommends 5070. py3dep 0.19 always requests 5070 from the server
+        # and then reprojects with rioxarray's default (nearest). Ask for 5070
+        # explicitly, then warp once with bilinear: elevation is continuous.
+        dem = py3dep.get_map(product, gdf.geometry.iloc[0], resolution=resolution, crs="EPSG:5070")
+        return self._reproject_continuous(dem, "EPSG:4326")
+
+    @staticmethod
+    def _reproject_continuous(da: Any, crs: str) -> Any:
+        """Reproject a continuous raster (elevation) with bilinear resampling."""
+        from rasterio.enums import Resampling
+
+        if da.rio.crs is None:
+            raise ValueError("3DEP DEM has no CRS; refusing to guess one.")
+        if da.rio.crs == crs:
+            return da
+        return da.rio.reproject(crs, resampling=Resampling.bilinear)
