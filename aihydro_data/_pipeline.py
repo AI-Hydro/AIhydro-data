@@ -523,6 +523,19 @@ def fetch(
         # makes them miss. Only requests whose candidate chain contains such a product are
         # re-keyed, so every other variable/product keeps its key unchanged.
         key_payload["stac_static_mosaic"] = 3
+    if any(s.source == "hyriver" and "py3dep_resolution" in (s.backend_config or {})
+           for s in candidate_specs):
+        # 3DEP resampling (0.2.9): elevation used to be nearest-resampled into 4326 by
+        # py3dep; it is now requested in 5070 and warped bilinear. Entries cached under
+        # the old code hold the nearest-resampled values; the marker makes them miss.
+        # Only requests whose chain contains a 3DEP product are re-keyed.
+        key_payload["py3dep_resampling"] = 1
+    if native_resolution and any(s.source == "gee" for s in candidate_specs):
+        # GEE native-resolution tile loss (0.2.9): a failed tile was skipped and the
+        # mosaic returned with a hole. Entries cached under the old code may hold such
+        # holes; the marker makes them miss. Only native_resolution requests whose chain
+        # contains a GEE product are re-keyed.
+        key_payload["gee_tile_integrity"] = 1
     if mode == "manual" and product:
         key_payload["product"] = product
     if index:

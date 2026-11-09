@@ -8,6 +8,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from aihydro_data.exceptions import SourceUnavailable
+
 log = logging.getLogger(__name__)
 
 
@@ -235,6 +237,7 @@ class _DownloadMixin:
 
         tiles = []
         tmps = []
+        failed_tiles: list[dict[str, Any]] = []
         try:
             for r in range(n_rows):
                 for c in range(n_cols):
@@ -254,12 +257,41 @@ class _DownloadMixin:
                         urllib.request.urlretrieve(url, tmp)  # noqa: S310
                         tiles.append(self._open_geotiff(tmp))
                     except Exception as exc:
-                        log.debug("%s: tile (r%d,c%d) skipped: %s", label, r, c, exc)
+                        # Keep going so the error names every failed tile, but
+                        # never merge a partial set: a skipped tile is a hole.
+                        log.warning(
+                            "%s: tile (r%d,c%d) failed: %s", label, r, c, exc,
+                        )
+                        failed_tiles.append({
+                            "row": r, "col": c,
+                            "bounds_wgs84": [tx0, ty0, tx1, ty1],
+                            "error": f"{type(exc).__name__}: {exc}",
+                        })
 
-            if not tiles:
-                raise RuntimeError(
-                    f"{label}: tiled download produced no data over the AOI."
+            if failed_tiles:
+                shown = failed_tiles[:10]
+                names = ", ".join(f"(r{t['row']},c{t['col']})" for t in shown)
+                if len(failed_tiles) > len(shown):
+                    names += f", ... and {len(failed_tiles) - len(shown)} more (see details)"
+                raise SourceUnavailable(
+                    code="GEE_TILE_DOWNLOAD_FAILED",
+                    message=(
+                        f"{label}: {len(failed_tiles)} of {n_rows * n_cols} "
+                        f"native-resolution tile(s) failed to download: {names}. "
+                        "The mosaic would contain holes, so no raster is returned."
+                    ),
+                    recovery=(
+                        "Retry the request, shrink the AOI, or drop "
+                        "native_resolution to accept a coarser single-request "
+                        "download."
+                    ),
+                    details={
+                        "failed_tiles": failed_tiles,
+                        "n_tiles": n_rows * n_cols,
+                        "n_tiles_ok": len(tiles),
+                    },
                 )
+
             if len(tiles) == 1:
                 return tiles[0]
             from rioxarray.merge import merge_arrays
