@@ -256,3 +256,31 @@ def test_mixed_epoch_flag_uses_start_datetime_when_datetime_is_null(monkeypatch)
     assert [i["datetime"][:4] for i in res.site_resolution["items"]] == ["2020", "2021"]
     assert "WORLDCOVER_MIXED_EPOCHS" in res.site_resolution["flags"]
     assert res.site_resolution["epochs_contributing"] == ["2020-01-01", "2021-01-01"]
+
+
+def test_epoch_order_beats_id_order_and_sortby_date_is_off(monkeypatch):
+    """Items whose ids sort in REVERSE of their epochs: stackstac must get them oldest first (newest last, on top)."""
+    spec = get_product("ESA_WORLDCOVER_STAC")
+    be = Backend()
+    monkeypatch.setattr(be, "_assert_available", lambda: None)
+    items = [SimpleNamespace(id="a_2021", datetime="2021-01-01T00:00:00Z"),
+             SimpleNamespace(id="z_2020", datetime="2020-01-01T00:00:00Z")]
+    assert sorted(i.id for i in items) == ["a_2021", "z_2020"]          # id order is the reverse of epoch order
+    cat = SimpleNamespace(search=lambda **k: SimpleNamespace(items=lambda: iter(items)))
+    monkeypatch.setattr(be, "_open_catalog", lambda url: cat)
+    cube = _tile_cube([("z_2020", slice(0, 8), 10), ("a_2021", slice(0, 6), 20)],
+                      times=np.array(["2020-01-01", "2021-01-01"], dtype="datetime64[ns]"), fill=0, dtype="uint8")
+    seen = {}
+
+    def fake_stack(sign_items, **kw):
+        seen["order"] = [it.id for it in sign_items]
+        seen["kw"] = kw
+        return cube
+
+    monkeypatch.setattr(stackstac, "stack", fake_stack)
+    _no_signing(monkeypatch)
+    out = be.fetch_raster(spec, SimpleNamespace(bounds=BBOX, geom_type="Polygon"), "", "")
+    assert seen["order"] == ["z_2020", "a_2021"]                        # epoch order, not id order
+    assert seen["kw"]["sortby_date"] is False
+    v = np.asarray(out)
+    assert (v[:, :6] == 20).all() and (v[:, 6:] == 10).all()           # the 2021 epoch is on top where it exists
