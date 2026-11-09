@@ -481,7 +481,7 @@ def test_outlet_cache_key_is_rounded_to_1e_minus_7(monkeypatch):
 
 def test_version_is_0_2_8():
     from aihydro_data._version import __version__
-    assert __version__ == "0.2.8"
+    assert __version__ == "0.2.9"
 
 
 # ---------------------------------------------------------------- final polish
