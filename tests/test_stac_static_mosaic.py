@@ -178,3 +178,66 @@ def test_non_stac_static_key_unchanged(monkeypatch):
     p = _capture_payloads(monkeypatch, "DEM3DEP_10M", "dem")
     assert "stac_static_mosaic" not in p
 
+
+
+# ── provenance, mixed-epoch flag, NaN guard (through the public fetch()) ─────
+
+def _fetch(monkeypatch, product, variable, cube, items, **kw):
+    import aihydro_data
+    from shapely.geometry import box
+    be_cls = Backend
+    monkeypatch.setattr(be_cls, "_assert_available", lambda self: None)
+    cat = SimpleNamespace(search=lambda **k: SimpleNamespace(items=lambda: iter(items)))
+    monkeypatch.setattr(be_cls, "_open_catalog", lambda self, url: cat)
+    monkeypatch.setattr(stackstac, "stack", lambda its, **k: cube)
+    _no_signing(monkeypatch)
+    return aihydro_data.fetch(variable, box(*BBOX), "", "", mode="manual", product=product,
+                              fallback=[], aggregation="raw_raster", **kw)
+
+
+def test_item_ids_and_datetimes_reach_result_and_manifest(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cube = _tile_cube([("t1", slice(0, 4), 1.0), ("t2", slice(4, 8), 2.0)])
+    res = _fetch(monkeypatch, "GLO30_STAC", "dem", cube, _items("t2", "t1"), cache=True)
+    sr = res.site_resolution
+    assert sr["method"] == "stac_static_mosaic"
+    assert [i["id"] for i in sr["items"]] == ["t1", "t2"]               # sorted order
+    assert all(i["datetime"] == "2021-04-22T00:00:00Z" for i in sr["items"])
+    assert sr["nan_fraction_bbox"] == 0.0 and sr["flags"] == []
+    manifests = [p for p in tmp_path.rglob("*") if p.is_file() and "t1" in p.read_text(errors="ignore")
+                 and "stac_static_mosaic" in p.read_text(errors="ignore")]
+    assert manifests, "item ids were not written to the cache manifest"
+
+
+def _wc_items():
+    return [SimpleNamespace(id="wc2021", datetime="2021-01-01T00:00:00Z"),
+            SimpleNamespace(id="wc2020", datetime="2020-01-01T00:00:00Z")]
+
+
+_WC_TIMES = np.array(["2020-01-01", "2021-01-01"], dtype="datetime64[ns]")
+
+
+def test_mixed_epoch_flag_fires_when_2020_fills_a_2021_gap(monkeypatch):
+    cube = _tile_cube([("wc2020", slice(0, 8), 10.0), ("wc2021", slice(0, 6), 20.0)], times=_WC_TIMES)
+    res = _fetch(monkeypatch, "ESA_WORLDCOVER_STAC", "landcover", cube, _wc_items(), cache=False)
+    assert "WORLDCOVER_MIXED_EPOCHS" in res.site_resolution["flags"]
+    assert res.site_resolution["epochs_contributing"] == ["2020-01-01", "2021-01-01"]
+    assert any("WORLDCOVER_MIXED_EPOCHS" in n and "not marked per pixel" in n for n in res.notes)
+
+
+def test_mixed_epoch_flag_silent_when_2021_is_complete(monkeypatch):
+    cube = _tile_cube([("wc2020", slice(0, 8), 10.0), ("wc2021", slice(0, 8), 20.0)], times=_WC_TIMES)
+    res = _fetch(monkeypatch, "ESA_WORLDCOVER_STAC", "landcover", cube, _wc_items(), cache=False)
+    assert res.site_resolution["flags"] == []
+    assert res.site_resolution["epochs_contributing"] == ["2021-01-01"]
+    assert not any("MIXED_EPOCHS" in n for n in res.notes)
+
+
+def test_nan_warning_fires_on_missing_tile_but_does_not_fail(monkeypatch):
+    # only the first tile was returned (e.g. stac_limit dropped the other): 50 % NaN
+    cube = _tile_cube([("t1", slice(0, 4), 1.0)])
+    res = _fetch(monkeypatch, "GLO30_STAC", "dem", cube, _items("t1"), cache=False)
+    assert res.site_resolution["nan_fraction_bbox"] == pytest.approx(0.5)
+    assert "STATIC_MOSAIC_NAN" in res.site_resolution["flags"]
+    assert any("STATIC_MOSAIC_NAN" in n and "heuristic" in n for n in res.notes)
+    assert res.data is not None
