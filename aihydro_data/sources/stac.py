@@ -36,6 +36,8 @@ import time
 import warnings
 from typing import Any, Optional
 
+import numpy as np
+
 from aihydro_data.contracts import AggregationMode, ProductSpec
 from aihydro_data.sources.base import SourceBackend
 
@@ -74,6 +76,26 @@ def _retry(func, *, max_retries: int = 3, base_delay: float = 2.0, label: str = 
                 time.sleep(wait)
             else:
                 raise
+
+
+def _mosaic_static(cube: Any) -> Any:
+    """Collapse the ``time`` axis of a *static* product by mosaicking, not by picking one item.
+
+    For a tiled static product (Copernicus GLO-30, ESA WorldCover) stackstac's ``time``
+    axis holds one entry per STAC item, i.e. per tile; each slice is NaN outside its own
+    footprint. Taking ``isel(time=0)`` kept one tile and NaN-ed the rest.
+
+    Each output pixel takes the first valid (non-NaN) value, scanning from the last slice
+    to the first (``stackstac.mosaic`` default: the last item is on top). The cube is
+    sorted by (datetime, id), so where tiles overlap — GLO-30 tiles share an edge
+    row/column — the greater id wins, and where epochs of one tile overlap (WorldCover
+    2020 and 2021) the newest wins and the older fills only pixels the newer lacks.
+    Overlap pixels are the same ground samples resampled onto one grid, so which tile
+    wins moves the value by at most sub-pixel resampling, not by a tile's worth.
+    """
+    import stackstac
+
+    return stackstac.mosaic(cube, dim="time", nodata=np.nan)
 
 
 class Backend(SourceBackend):
@@ -254,6 +276,14 @@ class Backend(SourceBackend):
             except ImportError:
                 pass  # unsigned — public assets still work for most collections
 
+        is_static = spec.timestep == "static"
+        if is_static:
+            # Deterministic overlap rule: stackstac sorts by datetime only, and every
+            # tile of a static product usually shares one datetime, so break ties by id.
+            sign_items = sorted(
+                sign_items, key=lambda it: (str(getattr(it, "datetime", None) or ""), str(getattr(it, "id", "")))
+            )
+
         def _load():
             return stackstac.stack(
                 sign_items,
@@ -261,14 +291,17 @@ class Backend(SourceBackend):
                 bounds_latlon=bbox,
                 resolution=stack_resolution,
                 epsg=stack_epsg,
+                # Explicit nodata: pixels outside an item's footprint (and the asset's
+                # declared nodata) become NaN, which is what the mosaic keys on.
+                fill_value=np.nan,
             )
 
         cube = _retry(_load, label=f"stackstac load {collection}")
 
         if "band" in cube.dims:
             cube = cube.isel(band=0, drop=True)
-        if spec.timestep == "static" and "time" in cube.dims:
-            cube = cube.isel(time=0, drop=True)
+        if is_static and "time" in cube.dims:
+            cube = _mosaic_static(cube)
         if unit_conversion != 1.0:
             cube = cube * unit_conversion
         return cube
