@@ -36,6 +36,8 @@ import time
 import warnings
 from typing import Any, Optional
 
+import numpy as np
+
 from aihydro_data.contracts import AggregationMode, ProductSpec
 from aihydro_data.sources.base import SourceBackend
 
@@ -74,6 +76,94 @@ def _retry(func, *, max_retries: int = 3, base_delay: float = 2.0, label: str = 
                 time.sleep(wait)
             else:
                 raise
+
+
+def _mosaic_static(cube: Any) -> Any:
+    """Collapse the ``time`` axis of a *static* product by mosaicking, not by picking one item.
+
+    For a tiled static product (Copernicus GLO-30, ESA WorldCover) stackstac's ``time``
+    axis holds one entry per STAC item, i.e. per tile; each slice is NaN outside its own
+    footprint. Taking ``isel(time=0)`` kept one tile and NaN-ed the rest.
+
+    Each output pixel takes the first valid (non-NaN) value, scanning from the last slice
+    to the first (``stackstac.mosaic`` default: the last item is on top). The cube is
+    sorted by (datetime, id), so where tiles overlap — GLO-30 tiles share an edge
+    row/column — the greater id wins, and where epochs of one tile overlap (WorldCover
+    2020 and 2021) the newest wins and the older fills only pixels the newer lacks.
+    Overlap pixels are the same ground samples resampled onto one grid, so which tile
+    wins moves the value by at most sub-pixel resampling (not measured), not by a tile's worth.
+    """
+    import stackstac
+
+    return stackstac.mosaic(cube, dim="time", nodata=np.nan)
+
+
+# Heuristic, not validated: a static mosaic with more than this NaN share inside the
+# requested bbox gets a warning (e.g. `stac_limit` dropped tiles on a very large bbox).
+# Legitimate NaN (ocean with no DEM tile, WorldCover no-data) trips it too; it never
+# fails the fetch.
+_STATIC_NAN_WARN_FRACTION = 0.01
+
+
+def _static_mosaic_with_provenance(
+    cube: Any, items: list, collection: str,
+) -> tuple[Any, dict[str, Any], list[str]]:
+    """Mosaic a static cube and return (mosaic, provenance record, notes).
+
+    ``items`` is the sorted list that was stacked (same order as the ``time`` axis).
+    Whether more than one epoch contributed pixels is computed from the data: a pixel
+    belongs to the newest epoch that has a valid value there, and the flag fires only if
+    an older epoch owns at least one pixel. Gap-fill pixels are not marked per pixel.
+    """
+    times = np.asarray(cube["time"].values)
+    n_epochs = len(set(times.tolist()))
+    epochs_used: list[str] = []
+    if n_epochs > 1:
+        cube = cube.compute()                       # need slices to attribute pixels
+        valid = ~np.isnan(np.asarray(cube))         # (time, y, x) after band drop
+        claimed = np.zeros(valid.shape[1:], dtype=bool)
+        owners: set = set()
+        for i in range(len(times) - 1, -1, -1):     # newest slice first
+            take = valid[i] & ~claimed
+            if take.any():
+                owners.add(times[i])
+            claimed |= valid[i]
+        epochs_used = [str(np.datetime64(t, "D")) for t in sorted(owners)]
+    mosaic = _mosaic_static(cube).compute()
+    nan_frac = float(np.isnan(np.asarray(mosaic)).mean())
+
+    notes: list[str] = []
+    flags: list[str] = []
+    if len(epochs_used) > 1:
+        flag = "WORLDCOVER_MIXED_EPOCHS" if collection == "esa-worldcover" else "STATIC_MIXED_EPOCHS"
+        flags.append(flag)
+        notes.append(
+            f"{flag}: more than one epoch contributed pixels ({', '.join(epochs_used)}); the "
+            f"newest epoch wins and older epochs fill only its gaps. Epochs can use different "
+            f"class algorithms (WorldCover v100 for 2020, v200 for 2021). Gap-fill pixels are "
+            f"not marked per pixel."
+        )
+    if nan_frac > _STATIC_NAN_WARN_FRACTION:
+        flags.append("STATIC_MOSAIC_NAN")
+        notes.append(
+            f"STATIC_MOSAIC_NAN: {nan_frac:.1%} of the mosaic inside the requested bbox is "
+            f"NaN (warning threshold {_STATIC_NAN_WARN_FRACTION:.0%} is a heuristic). Causes "
+            f"include tiles dropped by the STAC search limit on a very large bbox, areas "
+            f"without a tile (ocean) and source no-data; check the item list."
+        )
+    record = {
+        "method": "stac_static_mosaic",
+        "collection": collection,
+        "items": [
+            {"id": str(getattr(it, "id", "")), "datetime": str(getattr(it, "datetime", None) or "")}
+            for it in items
+        ],
+        "overlap_rule": "last item on top after sort by (datetime, id); newest epoch wins",
+        "nan_fraction_bbox": nan_frac,
+        "epochs_contributing": epochs_used,
+        "flags": flags,
+    }
+    return mosaic, record, notes
 
 
 class Backend(SourceBackend):
@@ -254,6 +344,14 @@ class Backend(SourceBackend):
             except ImportError:
                 pass  # unsigned — public assets still work for most collections
 
+        is_static = spec.timestep == "static"
+        if is_static:
+            # Deterministic overlap rule: stackstac sorts by datetime only, and every
+            # tile of a static product usually shares one datetime, so break ties by id.
+            sign_items = sorted(
+                sign_items, key=lambda it: (str(getattr(it, "datetime", None) or ""), str(getattr(it, "id", "")))
+            )
+
         def _load():
             return stackstac.stack(
                 sign_items,
@@ -261,16 +359,29 @@ class Backend(SourceBackend):
                 bounds_latlon=bbox,
                 resolution=stack_resolution,
                 epsg=stack_epsg,
+                # Explicit nodata: pixels outside an item's footprint (and the asset's
+                # declared nodata) become NaN, which is what the mosaic keys on.
+                fill_value=np.nan,
             )
 
         cube = _retry(_load, label=f"stackstac load {collection}")
 
         if "band" in cube.dims:
             cube = cube.isel(band=0, drop=True)
-        if spec.timestep == "static" and "time" in cube.dims:
-            cube = cube.isel(time=0, drop=True)
+        static_record: dict[str, Any] = {}
+        static_notes: list[str] = []
+        if is_static and "time" in cube.dims:
+            cube, static_record, static_notes = _static_mosaic_with_provenance(
+                cube, sign_items, collection,
+            )
         if unit_conversion != 1.0:
             cube = cube * unit_conversion
+        if static_record:
+            # Same route as NWIS/modelled-flow provenance: the pipeline pops these attrs
+            # onto FetchResult.site_resolution / notes and from there the manifest.
+            cube.attrs["aihydro_site_resolution"] = static_record
+            if static_notes:
+                cube.attrs["aihydro_notes"] = list(cube.attrs.get("aihydro_notes", [])) + static_notes
         return cube
 
     def fetch_multiband_composite(
