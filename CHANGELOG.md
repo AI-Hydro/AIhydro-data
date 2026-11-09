@@ -14,6 +14,16 @@ Next version: 0.2.9. Cached modelled-streamflow entries written before this chan
 - **Open-Meteo cell plausibility is recorded, not silent.** Without a basin area the result notes "cell not validated against basin area"; with one it records the specific discharge and runoff depth and notes that no precipitation comparison was made; a mean runoff depth above 5 mm/day is flagged `OPENMETEO_OVER_YIELD` (a warning, never a refusal). The existing under-yield refusal (`OPENMETEO_CELL_MISS`) is unchanged. The over-yield cap does not catch the Nairobi case (2.85 mm/day against about 3 mm/day precipitation); that needs a precipitation comparison, which is not done here.
 - **GEOGLOWS reach/target area ratio outside 0.5-2 adds a note** (the 0.05 refusal and 0.30 warning are unchanged), and a snap with no area target says the reach area was not checked.
 
+### Fixed - unverifiable GEOGLOWS benchmark citation removed
+
+- `GEOGLOWS_RETRO` `common_pitfalls` no longer quotes "Published global median KGE ≈ 0.36
+  (Qiao et al. 2024)". That citation could not be located in any bibliographic index
+  (2026-06-06) and no replacement figure could be quoted from a verified source
+  (`hales2025geoglows` exists, DOI 10.2139/ssrn.5257837, but its abstract was not retrievable),
+  so the benchmark sentence is dropped. The locally measured figures stay, labelled as a
+  5-gauge CONUS spot check of 2019 data (2026-06-04); NSE 0.37-0.47 is from only the two
+  medium basins that snapped correctly.
+
 ## [0.2.8] - 2026-11-07
 
 ### Fixed
