@@ -5,7 +5,8 @@ Offline: mocked HTTP / geoglows. Values come from the finding
 110042835 (12.0 km2) walks downstream; 110275060 (116 km2) matches the 166.9 km2
 basin, 110345907 (657 km2) matches the 819.4 km2 bbox; Open-Meteo returned the
 cell centred (-1.275, 36.825) at 1660 m for a request at (-1.28, 36.83). The
-intermediate reach ids and the 12 hops are synthetic filler for the walk.
+intermediate hops are synthetic filler: the 5 hops leading to 110275060 are
+invented, and only the 10 hops leading to 110345907 come from the finding.
 """
 from __future__ import annotations
 
@@ -206,5 +207,56 @@ def test_geoglows_ratio_outside_band_adds_a_note(geo, monkeypatch):
     monkeypatch.setattr("aihydro_data.geometry.measures.outlet_and_area",
                         lambda g, o=None: (-1.28, 36.83, BASIN_KM2))
     df = _geo_run(geo, _basin_polygon())
-    assert any("agreement band" in n and "110345907" in n for n in df.attrs["aihydro_notes"])
+    assert any("heuristic (not validated) agreement band" in n and "110345907" in n for n in df.attrs["aihydro_notes"])
     assert df.attrs["aihydro_site_resolution"]["area_ratio"] == pytest.approx(657.0 / BASIN_KM2)
+
+
+# ── cache key: pre-fix bbox entries must miss ────────────────────────────────
+
+def test_pre_fix_bbox_streamflow_cache_entry_is_not_served(monkeypatch):
+    """An entry stored under the old key shape (no modelled_site_identity) is not found."""
+    import aihydro_data
+    import aihydro_data.cache as cache_mod
+
+    seen: list[tuple[str, dict]] = []
+    real_key = cache_mod.cache_key
+    store: dict[str, str] = {}
+
+    def spy_key(payload):
+        k = real_key(payload)
+        seen.append((k, dict(payload)))
+        return k
+
+    class _Stop(Exception):
+        pass
+
+    def fake_read(ck, *a, **k):
+        if ck in store:
+            return store[ck]            # a stale hit would be returned (and served)
+        raise _Stop()
+
+    monkeypatch.setattr(cache_mod, "cache_key", spy_key)
+    monkeypatch.setattr(cache_mod, "cache_read", fake_read)
+
+    def run(geom):
+        try:
+            aihydro_data.fetch("streamflow", geom, "2020-01-01", "2020-01-05",
+                               mode="manual", product="GEOGLOWS_RETRO", fallback=[])
+        except _Stop:
+            pass
+        except Exception:
+            pass
+        return seen[-1]
+
+    new_key, payload = run(BBOX)
+    assert payload["modelled_site_identity"] == 2
+    old_payload = {k: v for k, v in payload.items() if k != "modelled_site_identity"}
+    old_key = real_key(old_payload)
+    assert old_key != new_key
+    store[old_key] = "STALE-PRE-FIX-ENTRY"          # the entry written by the old code
+    again_key, _ = run(BBOX)
+    assert again_key == new_key and again_key not in store   # old entry is not hit
+
+    # Unrelated geometry (a real, non-rectangular polygon) keeps its key shape.
+    _, poly_payload = run(_basin_polygon())
+    assert "modelled_site_identity" not in poly_payload

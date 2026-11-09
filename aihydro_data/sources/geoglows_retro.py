@@ -53,7 +53,8 @@ _REST_ENDPOINT = "https://geoglows.ecmwf.int/api/v2"
 # accepted-coverage trade-off on independent reaches and held-out basins.
 _SNAP_RATIO_FAIL = 0.05   # below this → definitely wrong reach → raise, force fallback
 _SNAP_RATIO_WARN = 0.30   # below this → suspicious → warn but return data
-# Recorded (as a note on the result) when the reach/target upstream-area ratio is outside
+# HEURISTIC, NOT VALIDATED: the 0.5-2 band was chosen by judgement, not fitted or tested
+# on a population of reaches. Recorded (as a note on the result) when the reach/target upstream-area ratio is outside
 # this band; the floor above still gates refusal. The upper side has no refusal: a
 # reach 4x the basin is served, so it must be said.
 _AREA_RATIO_NOTE_LO = 0.5
@@ -217,7 +218,7 @@ class Backend(SourceBackend):
                 f"GEOGLOWS reach {snap['river_id']} drains {snap['uparea_km2']:.0f} km2 vs a "
                 f"{target_area_km2:.0f} km2 target (ratio {ratio:.2f}); the series is for the reach, "
                 f"not the basin, and is outside the {_AREA_RATIO_NOTE_LO}-{_AREA_RATIO_NOTE_HI} "
-                f"agreement band.")
+                f"heuristic (not validated) agreement band.")
         df.attrs["aihydro_site_resolution"] = site_res
         df.attrs["aihydro_notes"] = list(df.attrs.get("aihydro_notes", [])) + notes
         # The zarr's own unit for the discharge variable. retro_daily's DataFrame

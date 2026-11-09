@@ -5,7 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Next version: 0.2.9. Cached modelled-streamflow entries written before this change have an empty `site_resolution` until refetched.
+Next version: 0.2.9. **Cache:** streamflow entries cached for a bbox-shaped geometry (an exact axis-aligned rectangle) before this change are no longer served, because their cache key changed (`modelled_site_identity`); they were resolved against the bbox area and carry an empty `site_resolution`. The next request refetches and caches under the new key; nothing refetches automatically. Streamflow keys for gauges, real polygons and points, and all other variables, are unchanged, so older modelled entries for those are still served with an empty `site_resolution`.
+
+**Behaviour change:** any exact axis-aligned rectangle with 5 or fewer coordinates is treated as a bbox (`is_bbox_like`), so a genuinely rectangular basin polygon now gets `area=None` (no area target) like a bbox does.
+
+**Heuristic thresholds, not validated:** the 5 mm/day `OPENMETEO_OVER_YIELD` cap and the 0.5-2 GEOGLOWS reach/target area-ratio band are judgement values, not tested on a population of cells or reaches; the notes say so.
 
 ### Fixed
 

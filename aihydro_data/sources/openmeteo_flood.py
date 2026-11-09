@@ -45,7 +45,8 @@ _FLOOD_ENDPOINT = "https://flood-api.open-meteo.com/v1/flood"
 # Threshold = 1e-3 m³/s/km² (1 L/s/km²). Only applied when polygon area is known.
 _SPECIFIC_Q_FLOOR = 1e-3
 
-# Over-yield flag (warning only, never a refusal): a mean runoff depth above this
+# Over-yield flag (HEURISTIC, NOT VALIDATED: 5 mm/day is a judgement cap, not tested
+# against a population of cells; warning only, never a refusal): a mean runoff depth above this
 # is beyond what almost any basin sustains (about 1.8 m/yr) and suggests the cell
 # is a larger river than the basin. The Nairobi case (2.85 mm/day on 166.9 km2,
 # runoff ratio near 1 against 3 mm/day precipitation) is BELOW this cap, so the cap
@@ -232,7 +233,7 @@ class Backend(SourceBackend):
                 site_res["plausibility"] = "over_yield"
                 notes.append(
                     f"OPENMETEO_OVER_YIELD: mean Q={float(mean_q_log):.3f} m3/s on {area_km2:.1f} km2 "
-                    f"implies {depth:.1f} mm/day of runoff (> {_RUNOFF_DEPTH_CAP_MM_DAY:g}); the "
+                    f"implies {depth:.1f} mm/day of runoff (> {_RUNOFF_DEPTH_CAP_MM_DAY:g}, a heuristic cap, not validated); the "
                     f"0.05 degree cell probably drains a larger area than this basin.")
             else:
                 site_res["plausibility"] = "not_validated_runoff_ratio"
