@@ -3,6 +3,18 @@
 All notable changes to `aihydro-data` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed - unverifiable GEOGLOWS benchmark citation removed
+
+- `GEOGLOWS_RETRO` `common_pitfalls` no longer quotes "Published global median KGE ≈ 0.36
+  (Qiao et al. 2024)". That citation could not be located in any bibliographic index
+  (2026-06-06) and no replacement figure could be quoted from a verified source
+  (`hales2025geoglows` exists, DOI 10.2139/ssrn.5257837, but its abstract was not retrievable),
+  so the benchmark sentence is dropped. The locally measured figures stay, labelled as a
+  5-gauge CONUS spot check of 2019 data (2026-06-04); NSE 0.37-0.47 is from only the two
+  medium basins that snapped correctly.
+
 ## [0.2.8] - 2026-11-07
 
 ### Fixed
