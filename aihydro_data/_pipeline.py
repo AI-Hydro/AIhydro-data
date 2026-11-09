@@ -507,6 +507,15 @@ def fetch(
         # The served data differ by USGS backend (Water Data API vs the legacy D3 switch).
         import os as _os
         key_payload["usgs_backend"] = _os.environ.get("AIHYDRO_USGS_BACKEND", "").strip().lower() or "waterdata"
+    if variable == "streamflow":
+        # Modelled-flow site identity (0.2.9): a bbox used to be treated as a basin-area
+        # target, so entries cached for a bbox hold the reach/cell chosen against that
+        # wrong area (and an empty site_resolution). Only bbox-shaped geometries get the
+        # marker, so pre-fix bbox entries miss while every other streamflow key (gauge,
+        # real polygon, point) and every other variable keeps its key unchanged.
+        from aihydro_data.geometry.measures import is_bbox_like as _is_bbox_like
+        if _is_bbox_like(geom):
+            key_payload["modelled_site_identity"] = 2
     if mode == "manual" and product:
         key_payload["product"] = product
     if index:

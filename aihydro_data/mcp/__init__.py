@@ -238,6 +238,10 @@ def _data_fetch(
                      'basin_mean' (default) → 1-D time series.
                      'raw_raster' → full clipped xarray.DataArray.
         cache:       True (default) — read from / write to disk cache.
+        outlet:      (lat, lon) snap point for modelled streamflow (GEOGLOWS, Open-Meteo).
+                     For area-matched reach selection pass the delineated basin POLYGON as
+                     geometry: a bbox is a search window and is never used as the basin area.
+                     The reach/cell that served is in site_resolution.
         fallback:    Manual mode only. Explicit product IDs to try if the pinned one
                      fails (opt-in). When one serves, the result carries
                      product_substituted=True and requested_product.

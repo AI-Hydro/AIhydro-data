@@ -30,6 +30,37 @@ def geodesic_area_km2(geometry: Any) -> Optional[float]:
         return None
 
 
+def is_bbox_like(geometry: Any) -> bool:
+    """True for an axis-aligned rectangle (what a bbox input is coerced to).
+
+    A bbox is a search window, not a basin: its area is not the contributing
+    area of anything, so it must never be a snap/plausibility target. A real
+    delineated basin is never an exact rectangle.
+    """
+    if getattr(geometry, "geom_type", None) != "Polygon" or geometry.interiors:
+        return False
+    try:
+        return len(geometry.exterior.coords) <= 5 and bool(geometry.equals(geometry.envelope))
+    except Exception:
+        return False
+
+
+def area_basis(geometry: Any) -> str:
+    """How `outlet_and_area` may use `geometry`: 'polygon', 'bbox' or 'point'."""
+    if is_bbox_like(geometry):
+        return "bbox"
+    if getattr(geometry, "geom_type", None) in ("Polygon", "MultiPolygon"):
+        return "polygon"
+    return "point"
+
+
+BBOX_AREA_NOTE = (
+    "Geometry is a bounding box, not a basin polygon: its area was NOT used as the basin-area "
+    "target for reach/cell matching. Pass the delineated basin polygon (not its bbox) to get an "
+    "area-matched snap."
+)
+
+
 def outlet_and_area(
     geometry: Any,
     outlet: Optional[tuple[float, float]] = None,
@@ -39,10 +70,11 @@ def outlet_and_area(
     - ``outlet`` (lat, lon), if given, wins as the snap point (a delineated pour
       point beats the centroid for main-channel snapping).
     - Otherwise: polygon → centroid; point → its own coords.
-    - ``area_km2`` is the polygon's geodesic area (None for point inputs),
-      regardless of which snap point was used — it validates the snap.
+    - ``area_km2`` is the polygon's geodesic area (None for point inputs and for
+      bbox-shaped inputs, see `is_bbox_like`), regardless of which snap point was
+      used — it validates the snap.
     """
-    is_polygon = getattr(geometry, "geom_type", None) in ("Polygon", "MultiPolygon")
+    is_polygon = area_basis(geometry) == "polygon"
     area = geodesic_area_km2(geometry) if is_polygon else None
 
     if outlet is not None:
