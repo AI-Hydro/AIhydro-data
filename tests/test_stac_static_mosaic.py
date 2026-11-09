@@ -20,10 +20,10 @@ BBOX = (-77.4, 40.6, -76.6, 41.4)        # spans two 1-degree tiles (lon -77|-76
 H, W = 4, 8
 
 
-def _tile_cube(tiles, times=None, dask=False):
+def _tile_cube(tiles, times=None, dask=False, fill=np.nan, dtype=float):
     """tiles: list of (item_id, col_slice, value_array|scalar). One time entry per item."""
     n = len(tiles)
-    data = np.full((n, 1, H, W), np.nan)
+    data = np.full((n, 1, H, W), fill, dtype=dtype)
     for i, (_, cols, val) in enumerate(tiles):
         data[i, 0, :, cols] = val
     arr = xr.DataArray(
@@ -101,13 +101,14 @@ def test_overlap_rule_greater_id_wins_and_order_is_deterministic(monkeypatch):
 
 def test_worldcover_newest_epoch_wins_older_fills_gaps(monkeypatch):
     times = np.array(["2020-01-01", "2021-01-01"], dtype="datetime64[ns]")
-    cube = _tile_cube([("wc2020", slice(0, 8), 10.0), ("wc2021", slice(0, 6), 20.0)], times=times)
+    cube = _tile_cube([("wc2020", slice(0, 8), 10), ("wc2021", slice(0, 6), 20)], times=times,
+                      fill=0, dtype="uint8")
     items = [SimpleNamespace(id="wc2021", datetime="2021-01-01T00:00:00Z"),
              SimpleNamespace(id="wc2020", datetime="2020-01-01T00:00:00Z")]
     out, seen = _run(monkeypatch, "ESA_WORLDCOVER_STAC", cube, items)
     assert seen["order"] == ["wc2020", "wc2021"]
     v = np.asarray(out)
-    assert (v[:, :6] == 20.0).all() and (v[:, 6:] == 10.0).all()
+    assert (v[:, :6] == 20).all() and (v[:, 6:] == 10).all()
 
 
 def test_time_varying_product_is_untouched(monkeypatch):
@@ -168,7 +169,7 @@ def _capture_payloads(monkeypatch, product, variable):
 def test_stac_static_cache_key_changed(monkeypatch, product, variable):
     import aihydro_data.cache as cache_mod
     payload = _capture_payloads(monkeypatch, product, variable)
-    assert payload["stac_static_mosaic"] == 2
+    assert payload["stac_static_mosaic"] == 3
     old = {k: v for k, v in payload.items() if k != "stac_static_mosaic"}
     assert cache_mod.cache_key(old) != cache_mod.cache_key(payload)
 
@@ -218,7 +219,8 @@ _WC_TIMES = np.array(["2020-01-01", "2021-01-01"], dtype="datetime64[ns]")
 
 
 def test_mixed_epoch_flag_fires_when_2020_fills_a_2021_gap(monkeypatch):
-    cube = _tile_cube([("wc2020", slice(0, 8), 10.0), ("wc2021", slice(0, 6), 20.0)], times=_WC_TIMES)
+    cube = _tile_cube([("wc2020", slice(0, 8), 10), ("wc2021", slice(0, 6), 20)], times=_WC_TIMES,
+                      fill=0, dtype="uint8")
     res = _fetch(monkeypatch, "ESA_WORLDCOVER_STAC", "landcover", cube, _wc_items(), cache=False)
     assert "WORLDCOVER_MIXED_EPOCHS" in res.site_resolution["flags"]
     assert res.site_resolution["epochs_contributing"] == ["2020-01-01", "2021-01-01"]
@@ -226,7 +228,8 @@ def test_mixed_epoch_flag_fires_when_2020_fills_a_2021_gap(monkeypatch):
 
 
 def test_mixed_epoch_flag_silent_when_2021_is_complete(monkeypatch):
-    cube = _tile_cube([("wc2020", slice(0, 8), 10.0), ("wc2021", slice(0, 8), 20.0)], times=_WC_TIMES)
+    cube = _tile_cube([("wc2020", slice(0, 8), 10), ("wc2021", slice(0, 8), 20)], times=_WC_TIMES,
+                      fill=0, dtype="uint8")
     res = _fetch(monkeypatch, "ESA_WORLDCOVER_STAC", "landcover", cube, _wc_items(), cache=False)
     assert res.site_resolution["flags"] == []
     assert res.site_resolution["epochs_contributing"] == ["2021-01-01"]

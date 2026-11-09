@@ -32,11 +32,13 @@ degrades to Element84 instead.
 from __future__ import annotations
 
 import logging
+import math
 import time
 import warnings
 from typing import Any, Optional
 
 import numpy as np
+import xarray as xr
 
 from aihydro_data.contracts import AggregationMode, ProductSpec
 from aihydro_data.sources.base import SourceBackend
@@ -78,7 +80,137 @@ def _retry(func, *, max_retries: int = 3, base_delay: float = 2.0, label: str = 
                 raise
 
 
-def _mosaic_static(cube: Any) -> Any:
+# Default ceiling on one static fetch's output (heuristic). A DEM is never coarsened
+# silently; an over-size request fails with a recovery instead.
+_STATIC_MAX_OUTPUT_BYTES = 1_000_000_000
+
+
+def _item_grid(item: Any, asset: str) -> Optional[dict[str, float]]:
+    """Native geographic grid of one item's asset from ``proj:transform`` (None if absent)."""
+    props = dict(getattr(item, "properties", None) or {})
+    try:
+        a = (getattr(item, "assets", None) or {}).get(asset)
+        extra = dict(getattr(a, "extra_fields", None) or {}) if a is not None else {}
+    except Exception:
+        extra = {}
+    tr = extra.get("proj:transform") or props.get("proj:transform")
+    epsg = extra.get("proj:epsg") or props.get("proj:epsg")
+    if not tr or len(tr) < 6 or (epsg is not None and int(epsg) != 4326):
+        return None
+    try:
+        xres, x0, yres, y0 = float(tr[0]), float(tr[2]), -float(tr[4]), float(tr[5])
+    except (TypeError, ValueError):
+        return None
+    if xres <= 0 or yres <= 0:
+        return None
+    return {"xres": xres, "yres": yres, "x0": x0, "y0": y0}
+
+
+def _snap(lo: float, hi: float, origin: float, res: float) -> tuple[float, float]:
+    """Snap [lo, hi] outward onto the lattice ``origin + k*res`` (edges)."""
+    i0 = math.floor((lo - origin) / res + 1e-6)
+    i1 = math.ceil((hi - origin) / res - 1e-6)
+    return origin + i0 * res, origin + i1 * res
+
+
+def _static_stack_kwargs(
+    items: list, asset: str, bbox: list, resolution: float, epsg: int, categorical: bool,
+) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+    """``stackstac.stack`` keyword arguments that reproduce the source pixel grid.
+
+    Geographic products are stacked on the finest native grid of the contributing items
+    (separate x and y spacing, from ``proj:transform``), with output edges snapped onto the
+    source lattice and ``snap_bounds=False`` so output centres coincide with source posts
+    (stackstac's default snap would put them half a pixel off). Coordinates are pixel
+    centres. Elevation is float32/NaN with bilinear resampling only where spacing bands
+    differ; categorical rasters are uint8/0 with nearest.
+    """
+    from rasterio.enums import Resampling
+
+    notes: list[str] = []
+    grids = [g for g in (_item_grid(it, asset) for it in items) if g]
+    kwargs: dict[str, Any] = {"epsg": epsg, "xy_coords": "center", "rescale": False}
+    if categorical:
+        kwargs.update(dtype="uint8", fill_value=np.uint8(0))   # np scalar: stackstac cast-checks the type
+        itemsize = 1
+    else:
+        kwargs.update(dtype="float32", fill_value=np.float32("nan"))
+        itemsize = 4
+    info: dict[str, Any] = {"itemsize": itemsize, "dtype": kwargs["dtype"], "grid_source": "proj:transform"}
+    west, south, east, north = bbox
+    if epsg == 4326 and grids:
+        xres = min(g["xres"] for g in grids)
+        yres = min(g["yres"] for g in grids)
+        ref = next(g for g in grids if g["xres"] == xres)
+        refy = next(g for g in grids if g["yres"] == yres)
+        west, east = _snap(west, east, ref["x0"], xres)
+        south, north = _snap(south, north, refy["y0"], yres)
+        bands = sorted({round(g["xres"] * 3600.0, 6) for g in grids})
+        info["x_spacing_arcsec_bands"] = bands
+        if len(bands) > 1:
+            notes.append(
+                f"Request crosses longitude-spacing bands ({', '.join(str(b) for b in bands)} arcsec): "
+                f"served on the finest spacing; coarser-band tiles are interpolated"
+                + ("" if categorical else " (bilinear)")
+                + ". Posts across a band boundary are not identical in the source."
+            )
+            if not categorical:
+                kwargs["resampling"] = Resampling.bilinear
+    elif epsg == 4326:
+        lat = (south + north) / 2
+        xres = resolution / max(111_320 * math.cos(math.radians(lat)), 1.0)
+        yres = resolution / 111_320
+        info["grid_source"] = "configured_resolution"
+        notes.append(
+            "Native grid not read from the items (no proj:transform); served on the configured "
+            f"{resolution} m converted to degrees separately per axis, bounds not lattice-snapped."
+        )
+        kwargs["snap_bounds"] = True
+    else:
+        xres = yres = float(resolution)
+        info["grid_source"] = "configured_resolution"
+    if info["grid_source"] == "proj:transform":
+        kwargs["snap_bounds"] = False
+    kwargs["bounds"] = (west, south, east, north)
+    kwargs["resolution"] = (xres, yres)
+    info.update(
+        xres=xres, yres=yres, bounds=[west, south, east, north],
+        nx=int(round((east - west) / xres)), ny=int(round((north - south) / yres)),
+    )
+    return kwargs, info, notes
+
+
+def _check_output_size(info: dict[str, Any], cfg: dict, collection: str, bbox: list) -> None:
+    cap = int(cfg.get("stac_max_output_bytes", _STATIC_MAX_OUTPUT_BYTES))
+    nbytes = info["nx"] * info["ny"] * info["itemsize"]
+    info["output_bytes"] = nbytes
+    if nbytes > cap:
+        from aihydro_data.exceptions import FetchTooLarge
+        raise FetchTooLarge(
+            code="STAC_OUTPUT_TOO_LARGE",
+            message=(
+                f"{collection} bbox={bbox} would be {info['nx']} x {info['ny']} pixels "
+                f"({nbytes / 1e9:.2f} GB) on the native grid; the cap is {cap / 1e9:.2f} GB. "
+                f"A DEM is not coarsened silently (it changes slope and flow paths)."
+            ),
+            recovery="Fetch a smaller area (split the basin into tiles) or raise backend_config['stac_max_output_bytes'].",
+            next_tools=["data_validate_request"],
+            docs_anchor="stac#size",
+        )
+
+
+def _write_georef(cube: Any) -> Any:
+    """Write CRS and the pixel-centre-derived transform so rioxarray round-trips exactly."""
+    try:
+        import rioxarray  # noqa: F401
+        out = cube.rio.write_crs(4326)
+        return out.rio.write_transform(out.rio.transform(recalc=True))
+    except Exception as exc:  # pragma: no cover - rioxarray is a declared extra
+        log.warning("could not write CRS/transform on static STAC raster: %s", exc)
+        return cube
+
+
+def _mosaic_static(cube: Any, nodata: Any = np.nan) -> Any:
     """Collapse the ``time`` axis of a *static* product by mosaicking, not by picking one item.
 
     For a tiled static product (Copernicus GLO-30, ESA WorldCover) stackstac's ``time``
@@ -95,7 +227,7 @@ def _mosaic_static(cube: Any) -> Any:
     """
     import stackstac
 
-    return stackstac.mosaic(cube, dim="time", nodata=np.nan)
+    return stackstac.mosaic(cube, dim="time", nodata=nodata)
 
 
 # Heuristic, not validated: a static mosaic with more than this NaN share inside the
@@ -105,8 +237,13 @@ def _mosaic_static(cube: Any) -> Any:
 _STATIC_NAN_WARN_FRACTION = 0.01
 
 
+def _is_valid(arr: Any, nodata: Any) -> Any:
+    """Boolean mask of valid pixels (NaN-aware when ``nodata`` is NaN)."""
+    return ~np.isnan(arr) if (isinstance(nodata, float) and np.isnan(nodata)) else (arr != nodata)
+
+
 def _static_mosaic_with_provenance(
-    cube: Any, items: list, collection: str,
+    cube: Any, items: list, collection: str, nodata: Any = np.nan,
 ) -> tuple[Any, dict[str, Any], list[str]]:
     """Mosaic a static cube and return (mosaic, provenance record, notes).
 
@@ -120,7 +257,7 @@ def _static_mosaic_with_provenance(
     epochs_used: list[str] = []
     if n_epochs > 1:
         cube = cube.compute()                       # need slices to attribute pixels
-        valid = ~np.isnan(np.asarray(cube))         # (time, y, x) after band drop
+        valid = _is_valid(np.asarray(cube), nodata)         # (time, y, x) after band drop
         claimed = np.zeros(valid.shape[1:], dtype=bool)
         owners: set = set()
         for i in range(len(times) - 1, -1, -1):     # newest slice first
@@ -129,8 +266,8 @@ def _static_mosaic_with_provenance(
                 owners.add(times[i])
             claimed |= valid[i]
         epochs_used = [str(np.datetime64(t, "D")) for t in sorted(owners)]
-    mosaic = _mosaic_static(cube).compute()
-    nan_frac = float(np.isnan(np.asarray(mosaic)).mean())
+    mosaic = _mosaic_static(cube, nodata).compute()
+    nan_frac = float((~_is_valid(np.asarray(mosaic), nodata)).mean())
 
     notes: list[str] = []
     flags: list[str] = []
@@ -164,6 +301,86 @@ def _static_mosaic_with_provenance(
         "flags": flags,
     }
     return mosaic, record, notes
+
+
+# Heuristic, not validated: share of basin pixels with a valid value below which a static
+# basin mean is flagged / refused. Any shortfall is flagged; below the refusal floor the
+# candidate fails (so the fallback chain continues) rather than serving a mean of a sliver.
+_BASIN_COVERAGE_FLAG = 1.0
+_BASIN_COVERAGE_REFUSE = 0.5
+
+
+def _basin_mean(raster: Any, geometry: Any, cfg: dict) -> tuple[float, dict[str, Any], list[str]]:
+    """NaN-aware mean of a static raster over the basin mask, plus coverage of the basin.
+
+    Pixels are those inside the polygon (rasterio ``geometry_mask``; ``all_touched`` only if the polygon
+    contains no pixel centre). A non-areal geometry (point) takes the nearest pixel. The
+    categorical nodata value (0) is excluded like NaN. ``basin_coverage_fraction`` is the
+    share of the basin's pixels holding a valid value.
+    """
+    categorical = bool(cfg.get("categorical", False))
+    arr = raster
+    geom_type = getattr(geometry, "geom_type", "")
+    bounds = getattr(geometry, "bounds", None)
+    if geom_type in ("Polygon", "MultiPolygon"):
+        mask = None
+        try:
+            import rioxarray  # noqa: F401
+            from rasterio.features import geometry_mask
+            tr = arr.rio.transform(recalc=True)
+            for touched in (False, True):
+                m = ~geometry_mask([geometry], out_shape=arr.shape, transform=tr, all_touched=touched)
+                if m.any():
+                    mask = m
+                    break
+        except Exception as exc:
+            log.warning("basin mask failed (%s); using the whole bbox", exc)
+        basis = "polygon" if mask is not None else "bbox"
+        if mask is None:
+            mask = np.ones(arr.shape, dtype=bool)
+    elif geom_type == "Point" and bounds is not None:
+        pt = arr.sel(x=bounds[0], y=bounds[1], method="nearest")
+        v = np.asarray(pt).reshape(1)
+        valid = (v != 0) if categorical else ~np.isnan(v)
+        mask = np.ones(1, dtype=bool)
+        data = v
+        basis = "point"
+        return _finish_mean(data, valid, basis, categorical)
+    else:
+        mask = np.ones(arr.shape, dtype=bool)
+        basis = "bbox"
+    data = np.asarray(arr)[mask]
+    valid = (data != 0) if categorical else ~np.isnan(data)
+    return _finish_mean(data, valid, basis, categorical)
+
+
+def _finish_mean(data: Any, valid: Any, basis: str, categorical: bool) -> tuple[float, dict[str, Any], list[str]]:
+    n = int(data.size)
+    nv = int(valid.sum())
+    cov = nv / n if n else 0.0
+    info = {"basin_coverage_fraction": cov, "n_basin_pixels": n, "n_valid_pixels": nv, "mask_basis": basis}
+    notes: list[str] = []
+    if nv == 0 or cov < _BASIN_COVERAGE_REFUSE:
+        from aihydro_data.exceptions import SourceUnavailable
+        raise SourceUnavailable(
+            code="STAC_LOW_COVERAGE",
+            message=(
+                f"Only {cov:.1%} of the basin's {n} pixels hold a valid value (floor "
+                f"{_BASIN_COVERAGE_REFUSE:.0%}, a heuristic); a mean of that sliver would not "
+                f"describe the basin."
+            ),
+            recovery="Use another product via the fallback chain, or check tile coverage for the area.",
+            next_tools=["data_list_products"],
+            docs_anchor="stac#coverage",
+            details=info,
+        )
+    if cov < _BASIN_COVERAGE_FLAG:
+        notes.append(
+            f"STAC_BASIN_COVERAGE: the basin mean uses {nv} of {n} basin pixels "
+            f"({cov:.1%} covered); the rest have no data and were excluded, not zero-filled."
+        )
+    mean = float(data[valid].astype("float64").mean())
+    return mean, info, notes
 
 
 class Backend(SourceBackend):
@@ -221,9 +438,14 @@ class Backend(SourceBackend):
         import numpy as np
 
         if "time" not in raster.dims:
-            value = float(np.asarray(raster).mean())
-            return pd.DataFrame({"date": [pd.Timestamp(start)],
-                                 spec.variable: [value]})
+            value, info, notes = _basin_mean(raster, geometry, spec.backend_config)
+            df = pd.DataFrame({"date": [pd.Timestamp(start)], spec.variable: [value]})
+            raster_notes = list(raster.attrs.get("aihydro_notes", []))
+            df.attrs["aihydro_notes"] = raster_notes + notes
+            df.attrs["aihydro_quality"] = info
+            if raster.attrs.get("aihydro_site_resolution"):
+                df.attrs["aihydro_site_resolution"] = raster.attrs["aihydro_site_resolution"]
+            return df
 
         if aggregation in ("basin_mean", "centroid"):
             series = raster.mean(dim=[d for d in raster.dims if d != "time"])
@@ -243,6 +465,7 @@ class Backend(SourceBackend):
         geometry: Any,
         start: str,
         end: str,
+        native_resolution: bool = False,
     ) -> Any:
         """Stack the matching STAC items into an xarray DataArray.
 
@@ -327,13 +550,9 @@ class Backend(SourceBackend):
         import math
 
         stack_epsg = cfg.get("stac_epsg", 4326)
-
-        if stack_epsg == 4326:
-            bbox_centre_lat = (bbox[1] + bbox[3]) / 2
-            metres_per_deg = max(111_320 * math.cos(math.radians(bbox_centre_lat)), 1.0)
-            stack_resolution = resolution / metres_per_deg
-        else:
-            stack_resolution = float(resolution)
+        is_static = spec.timestep == "static"
+        categorical = bool(cfg.get("categorical", False))
+        grid_notes: list[str] = []
 
         # Sign items if they came from Planetary Computer.
         sign_items = items
@@ -344,25 +563,42 @@ class Backend(SourceBackend):
             except ImportError:
                 pass  # unsigned — public assets still work for most collections
 
-        is_static = spec.timestep == "static"
+        stack_kwargs: dict[str, Any]
+        grid_info: dict[str, Any] = {}
         if is_static:
             # Deterministic overlap rule: stackstac sorts by datetime only, and every
             # tile of a static product usually shares one datetime, so break ties by id.
             sign_items = sorted(
                 sign_items, key=lambda it: (str(getattr(it, "datetime", None) or ""), str(getattr(it, "id", "")))
             )
-
-        def _load():
-            return stackstac.stack(
-                sign_items,
-                assets=[asset],
-                bounds_latlon=bbox,
-                resolution=stack_resolution,
-                epsg=stack_epsg,
-                # Explicit nodata: pixels outside an item's footprint (and the asset's
-                # declared nodata) become NaN, which is what the mosaic keys on.
+            stack_kwargs, grid_info, grid_notes = _static_stack_kwargs(
+                sign_items, asset, bbox, resolution, stack_epsg, categorical,
+            )
+            _check_output_size(grid_info, cfg, collection, bbox)
+            if native_resolution:
+                grid_notes.append(
+                    "native_resolution=True: honoured, static STAC products are always served "
+                    "on the native source grid."
+                )
+        else:
+            if native_resolution:
+                grid_notes.append(
+                    "native_resolution=True was ignored: time-varying STAC products are "
+                    "stacked at the configured stac_resolution."
+                )
+            if stack_epsg == 4326:
+                bbox_centre_lat = (bbox[1] + bbox[3]) / 2
+                metres_per_deg = max(111_320 * math.cos(math.radians(bbox_centre_lat)), 1.0)
+                stack_resolution = resolution / metres_per_deg
+            else:
+                stack_resolution = float(resolution)
+            stack_kwargs = dict(
+                bounds_latlon=bbox, resolution=stack_resolution, epsg=stack_epsg,
                 fill_value=np.nan,
             )
+
+        def _load():
+            return stackstac.stack(sign_items, assets=[asset], **stack_kwargs)
 
         cube = _retry(_load, label=f"stackstac load {collection}")
 
@@ -373,9 +609,16 @@ class Backend(SourceBackend):
         if is_static and "time" in cube.dims:
             cube, static_record, static_notes = _static_mosaic_with_provenance(
                 cube, sign_items, collection,
+                nodata=0 if categorical else np.nan,
             )
+            static_record["grid"] = grid_info
         if unit_conversion != 1.0:
             cube = cube * unit_conversion
+        if is_static:
+            cube = _write_georef(cube)
+            static_notes = grid_notes + static_notes
+        elif grid_notes:
+            cube.attrs["aihydro_notes"] = list(cube.attrs.get("aihydro_notes", [])) + grid_notes
         if static_record:
             # Same route as NWIS/modelled-flow provenance: the pipeline pops these attrs
             # onto FetchResult.site_resolution / notes and from there the manifest.
