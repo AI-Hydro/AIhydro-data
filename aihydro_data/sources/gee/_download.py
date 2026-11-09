@@ -269,9 +269,10 @@ class _DownloadMixin:
                         })
 
             if failed_tiles:
-                names = ", ".join(
-                    f"(r{t['row']},c{t['col']})" for t in failed_tiles
-                )
+                shown = failed_tiles[:10]
+                names = ", ".join(f"(r{t['row']},c{t['col']})" for t in shown)
+                if len(failed_tiles) > len(shown):
+                    names += f", ... and {len(failed_tiles) - len(shown)} more (see details)"
                 raise SourceUnavailable(
                     code="GEE_TILE_DOWNLOAD_FAILED",
                     message=(
@@ -291,10 +292,6 @@ class _DownloadMixin:
                     },
                 )
 
-            if not tiles:
-                raise RuntimeError(
-                    f"{label}: tiled download produced no data over the AOI."
-                )
             if len(tiles) == 1:
                 return tiles[0]
             from rioxarray.merge import merge_arrays
