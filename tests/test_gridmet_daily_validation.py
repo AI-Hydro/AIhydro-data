@@ -29,9 +29,9 @@ SPEC = SimpleNamespace(variable="precipitation", source="hyriver",
                        backend_config={"pygridmet_variable": "pr"})
 
 
-def _year_ds(year: int, a: str, b: str, drop_leap_dec31: bool = True) -> xr.Dataset:
+def _year_ds(year: int, a: str, b: str, drop_leap_dec31: bool = False) -> xr.Dataset:
     days = pd.date_range(a, b)
-    if drop_leap_dec31:                       # what pygridmet's dates_tolist requests
+    if drop_leap_dec31:                       # what pygridmet's dates_tolist requested (the server holds the day)
         days = days[~((days.month == 12) & (days.day == 31) & days.is_leap_year)]
     vals = np.broadcast_to((year * 1000 + days.dayofyear.values)[:, None, None],
                            (len(days), 2, 2)).astype("f4")
@@ -47,7 +47,7 @@ class FakeGridmet:
     `faults[year] = {"kind": "truncate"|"gap"|"raise", "arg": ..., "persistent": bool}`
     injects a fault on the shared cache (and on the private one when persistent)."""
 
-    def __init__(self, poison=None, poison_private=False, drop_leap_dec31=True, faults=None):
+    def __init__(self, poison=None, poison_private=False, drop_leap_dec31=False, faults=None):
         self.poison = poison or {}
         self.poison_private = poison_private
         self.drop = drop_leap_dec31
@@ -58,9 +58,6 @@ class FakeGridmet:
         private = bool(os.environ.get("HYRIVER_CACHE_NAME"))
         self.calls.append((a, b, private))
         y = pd.Timestamp(a).year
-        if pd.Timestamp(a) == pd.Timestamp(b) and pd.Timestamp(a).is_leap_year \
-                and pd.Timestamp(a).month == 12 and pd.Timestamp(a).day == 31:
-            return _year_ds(y, a, b, True).isel(time=slice(0, 0))      # real pygridmet: []
         f = self.faults.get(y)
         active = f and (f.get("persistent") or not private)
         if active and f["kind"] == "raise":
@@ -92,10 +89,8 @@ def fake(monkeypatch):
     monkeypatch.setenv("AIHYDRO_DATA_NO_RETRY", "1")
 
     def install(client):
-        mod = types.ModuleType("pygridmet")
-        mod.get_bygeom = client.get_bygeom
-        mod.get_bycoords = client.get_bycoords
-        monkeypatch.setitem(sys.modules, "pygridmet", mod)
+        # GridMET is fetched by the direct NCSS client; the seam is the client factory.
+        monkeypatch.setattr(hyriver, "_gridmet_client", lambda: client)
         return client
     return install
 
@@ -108,7 +103,7 @@ def _fetch(start="1998-01-01", end="2000-12-31", aggregation="basin_mean"):
 def _coverage(df, start, end):
     """What the pipeline computes from the backend's attrs."""
     dropped, hints = dv.chunk_hints(df.attrs.get("aihydro_chunk_validation", {}))
-    return _temporal_coverage(df, start, end, timestep="daily", skip_leap_dec31=True,
+    return _temporal_coverage(df, start, end, timestep="daily", skip_leap_dec31=False,
                               chunk_mismatch_ranges=dropped, reason_hints=hints)
 
 
@@ -148,29 +143,48 @@ def test_persistent_wrong_year_not_merged_and_reported(fake):
     assert any("NOT merged" in n for n in df.attrs["aihydro_notes"])
 
     cov = _temporal_coverage(
-        df, "1998-01-01", "2000-12-31", timestep="daily", skip_leap_dec31=True,
+        df, "1998-01-01", "2000-12-31", timestep="daily", skip_leap_dec31=False,
         chunk_mismatch_ranges=[(f["start"], f["end"]) for f in fails])
     assert cov["coverage_complete"] is False
-    assert cov["days_missing_internal"] == 365                # 1999 only; 2000-12-31 is the tail
-    assert cov["days_missing_tail"] == 1
+    assert cov["days_missing_internal"] == 365                # 1999 only; 2000-12-31 is served
+    assert cov["days_missing_tail"] == 0
     by_reason = {}
     for r in cov["missing_ranges"]:
         by_reason.setdefault(r["reason"], []).append((r["start"], r["end"], r["days"]))
-    assert by_reason["chunk_mismatch"] == [("1999-01-01", "1999-12-31", 365)]
-    assert by_reason["client_calendar_assumption"] == [("2000-12-31", "2000-12-31", 1)]
+    assert by_reason == {"chunk_mismatch": [("1999-01-01", "1999-12-31", 365)]}
 
 
-def test_leap_year_dec31_reported_as_client_calendar_assumption(fake):
+def test_leap_year_dec31_is_requested_and_served(fake):
+    client = fake(FakeGridmet())
+    df = _fetch("1999-01-01", "2001-12-31")
+    assert (df["date"].dt.year == 2000).sum() == 366
+    assert pd.Timestamp("2000-12-31") in set(df["date"])
+    assert ("2000-01-01", "2000-12-31", False) in client.calls     # the whole year, 31 Dec included
+    assert "aihydro_chunk_validation" not in df.attrs
+    cov = _coverage(df, "1999-01-01", "2001-12-31")
+    assert cov["coverage_complete"] is True and cov["days_missing_internal"] == 0
+    assert cov["missing_ranges"] == []
+
+
+def test_a_source_without_31_dec_is_counted_and_reported_never_filled(fake):
+    """If a server really lacked 31 Dec of a leap year the year is reported, not patched."""
     fake(FakeGridmet(drop_leap_dec31=True))
     df = _fetch("1999-01-01", "2001-12-31")
-    cov = _temporal_coverage(df, "1999-01-01", "2001-12-31", timestep="daily",
-                             skip_leap_dec31=True)
-    assert cov["days_missing_internal"] == 1
-    assert cov["missing_ranges"] == [
-        {"start": "2000-12-31", "end": "2000-12-31", "days": 1,
-         "reason": "client_calendar_assumption"}]
-    # disclosed, not a coverage failure, and never worded as missing in GridMET
-    assert cov["coverage_complete"] is True
+    assert pd.Timestamp("2000-12-31") not in set(df["date"])       # no invented row
+    failed = df.attrs["aihydro_chunk_validation"]["failures"]
+    assert [(f["start"], f["end"], f["reason"]) for f in failed] == [
+        ("2000-01-01", "2000-12-31", "chunk_mismatch")]
+    assert "truncated" in failed[0]["problems"][0]
+    cov = _coverage(df, "1999-01-01", "2001-12-31")
+    assert cov["coverage_complete"] is False
+    assert cov["days_missing_internal"] == 366                    # all of 2000, counted
+    assert {r["reason"] for r in cov["missing_ranges"]} == {"chunk_mismatch"}
+
+
+def test_gridmet_is_no_longer_a_leap_dec31_skipper_but_daymet_is():
+    from aihydro_data.products import get_product
+    assert dv.skips_leap_dec31(get_product("GRIDMET_PRECIP")) is False
+    assert dv.skips_leap_dec31(get_product("DAYMET_PRECIP")) is True
 
 
 def test_same_gap_without_the_assumption_is_absent_and_incomplete():
@@ -201,18 +215,18 @@ def test_validator_flags_duplicates_missing_year_and_cross_wired_chunk():
 
 def test_precipitation_cache_key_changes_and_others_unchanged():
     for var in ("precipitation", "tmax", "tmin", "pet"):
-        assert _result_schema_for(var) == f"{RESULT_SCHEMA_VERSION}.{var}.2"
+        assert _result_schema_for(var) == f"{RESULT_SCHEMA_VERSION}.{var}.3"
     assert _result_schema_for("srad") == RESULT_SCHEMA_VERSION      # unlisted: same key
 
 
 # ── caching of degraded results ───────────────────────────────────────────
 
-def _gridmet_result(drop_days, ranges):
+def _gridmet_result(drop_days, ranges, product="GRIDMET_PRECIP"):
     from aihydro_data.contracts import FetchRequest, FetchResult
     days = pd.date_range("2000-12-20", "2001-01-10").difference(pd.DatetimeIndex(drop_days))
     df = pd.DataFrame({"date": days, "precipitation": 1.0})
     return FetchResult(
-        variable="precipitation", product="GRIDMET_PRECIP", source="hyriver",
+        variable="precipitation", product=product, source="hyriver",
         request=FetchRequest(variable="precipitation", geometry=GEOM,
                              start="2000-12-20", end="2001-01-10"),
         cache_key="gridmetkey000000000000", data=df, license="pd", citation="c", bibtex="b",
@@ -239,7 +253,7 @@ def test_calendar_assumption_gap_is_cached_and_reasons_survive_restore(tmp_path)
     from aihydro_data.cache import cache_read, cache_write
     rng = [{"start": "2000-12-31", "end": "2000-12-31", "days": 1,
             "reason": "client_calendar_assumption"}]
-    res = _gridmet_result([pd.Timestamp("2000-12-31")], rng)
+    res = _gridmet_result([pd.Timestamp("2000-12-31")], rng, product="DAYMET_PRECIP")
     with patch("aihydro_data.cache.cache_dir", return_value=tmp_path):
         assert cache_write(res)
         stored = json.loads((tmp_path / "gridmetkey000000000000.manifest.json").read_text())
@@ -337,16 +351,14 @@ def test_recent_window_boundary_is_14_days():
     assert not dv.tail_may_be_archive_edge(now - pd.Timedelta(days=15))
 
 
-def test_window_starting_on_leap_dec31_skips_the_empty_chunk(fake):
+def test_window_starting_on_leap_dec31_fetches_that_day(fake):
     client = fake(FakeGridmet())
     df = _fetch("2000-12-31", "2001-03-31")
-    assert ("2000-12-31", "2000-12-31", False) not in client.calls
+    assert ("2000-12-31", "2000-12-31", False) in client.calls
     assert "aihydro_chunk_validation" not in df.attrs
-    assert df["date"].min() == pd.Timestamp("2001-01-01")
+    assert df["date"].min() == pd.Timestamp("2000-12-31")
     cov = _coverage(df, "2000-12-31", "2001-03-31")
-    assert cov["missing_ranges"] == [{"start": "2000-12-31", "end": "2000-12-31", "days": 1,
-                                      "reason": "client_calendar_assumption"}]
-    assert cov["coverage_complete"] is True
+    assert cov["missing_ranges"] == [] and cov["coverage_complete"] is True
 
 
 def test_year_chunks_skip_only_the_leap_dec31_only_chunk():
@@ -389,7 +401,7 @@ def test_exception_on_retry_records_one_year_and_keeps_the_rest(fake):
     fake(FakeGridmet(faults={1999: {"kind": "raise", "persistent": True}}))
     df = _fetch()
     assert (df["date"].dt.year == 1999).sum() == 0
-    assert (df["date"].dt.year == 1998).sum() == 365 and (df["date"].dt.year == 2000).sum() == 365
+    assert (df["date"].dt.year == 1998).sum() == 365 and (df["date"].dt.year == 2000).sum() == 366
     f = df.attrs["aihydro_chunk_validation"]["failures"]
     assert f[0]["reason"] == "chunk_mismatch" and "fetch error: ConnectionError" in f[0]["problems"][0]
 
@@ -439,7 +451,7 @@ def test_cache_read_of_a_legacy_manifest_without_missing_ranges(tmp_path):
     from aihydro_data.cache import cache_read, cache_write
     rng = [{"start": "2000-12-31", "end": "2000-12-31", "days": 1,
             "reason": "client_calendar_assumption"}]
-    res = _gridmet_result([pd.Timestamp("2000-12-31")], rng)
+    res = _gridmet_result([pd.Timestamp("2000-12-31")], rng, product="DAYMET_PRECIP")
     mf = tmp_path / "gridmetkey000000000000.manifest.json"
     with patch("aihydro_data.cache.cache_dir", return_value=tmp_path):
         assert cache_write(res)

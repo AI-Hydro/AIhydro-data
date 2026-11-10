@@ -1,0 +1,73 @@
+{
+ "WY2000": {
+  "window": [
+   "1999-10-01",
+   "2000-09-30"
+  ],
+  "days_expected": 366,
+  "days_returned": 366,
+  "missing": [],
+  "seconds": 5.3,
+  "requests": 2,
+  "nan_days": 0,
+  "mean_mm_day": 2.7946,
+  "total_mm": 1022.8,
+  "basin_mean": {
+   "method": "cell_centre_in_polygon_unweighted_mean",
+   "grid_deg": 0.041667,
+   "cells_in_geometry": 315,
+   "cells_with_data": 313,
+   "cells_without_data": 2,
+   "all_touched_fallback": false
+  },
+  "rejected": [],
+  "splits": 0,
+  "chunk_validation": null,
+  "notes": [
+   "2 of 315 grid cells inside the geometry have no GridMET data (outside the CONUS grid, e.g. Canada or open water); the basin mean is over the 313 cells that have data.",
+   "GridMET basin value: cell_centre_in_polygon_unweighted_mean over 313 of 315 grid cells (1/24 deg) whose centre is inside the geometry. Cells are not area-weighted. Fetched directly from THREDDS NCSS (2 request(s))."
+  ],
+  "response_sha256": [
+   "bc2cf318f8cf5268d2cdc9f89fc28d7d6015f3a4e4e7d2e1e9466dce17fcd16f",
+   "3050b2795023adb01a75ca587016761af8a697433a22550f739385ea22a1ce49"
+  ]
+ },
+ "CY2000_leap_dec31": {
+  "window": [
+   "2000-01-01",
+   "2000-12-31"
+  ],
+  "days_expected": 366,
+  "days_returned": 366,
+  "missing": [],
+  "seconds": 2.0,
+  "requests": 1,
+  "nan_days": 0,
+  "mean_mm_day": 2.7392,
+  "total_mm": 1002.6,
+  "basin_mean": {
+   "method": "cell_centre_in_polygon_unweighted_mean",
+   "grid_deg": 0.041667,
+   "cells_in_geometry": 315,
+   "cells_with_data": 313,
+   "cells_without_data": 2,
+   "all_touched_fallback": false
+  },
+  "rejected": [],
+  "splits": 0,
+  "chunk_validation": null,
+  "notes": [
+   "2 of 315 grid cells inside the geometry have no GridMET data (outside the CONUS grid, e.g. Canada or open water); the basin mean is over the 313 cells that have data.",
+   "GridMET basin value: cell_centre_in_polygon_unweighted_mean over 313 of 315 grid cells (1/24 deg) whose centre is inside the geometry. Cells are not area-weighted. Fetched directly from THREDDS NCSS (1 request(s))."
+  ],
+  "response_sha256": [
+   "c8075dfe03bc315087f6cfa914e21adca95c901e73a219cec6d14724317bc8a2"
+  ],
+  "2000-12-30": 0.011821086518466473,
+  "2000-12-31": 18.496166229248047,
+  "2000-02-29": 1.6568689346313477
+ },
+ "requests_this_script": 3,
+ "requests_prior_probes": 7,
+ "requests_total": 10
+}

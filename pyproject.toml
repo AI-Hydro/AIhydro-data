@@ -75,15 +75,16 @@ stac = [
     "xarray>=2023.0.0",
 ]
 
-# HyRiver backend (sources/hyriver.py) — CONUS via pygridmet/pygeohydro/etc.
+# HyRiver backend (sources/hyriver.py) — CONUS via pygeohydro/pydaymet/py3dep; GridMET goes
+# through sources/_gridmet_ncss.py (requests + xarray + netCDF4), not pygridmet.
 hyriver = [
     "pynhd>=0.16.0",
     "pygeohydro>=0.16.0",
-    "pygridmet>=0.15.0",
     "pydaymet>=0.16.0",   # sources/hyriver.py imports this directly for DAYMET_* products
     "py3dep>=0.15.0",
     "rioxarray>=0.15.0",
     "xarray>=2023.0.0",
+    "netCDF4>=1.6.0",     # sources/_gridmet_ncss.py reads the NCSS NetCDF with this engine (no scipy)
 ]
 
 # NWIS streamflow now comes from the USGS Water Data OGC API
@@ -159,6 +160,7 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.12.0",
     "xarray>=2023.0.0",
+    "netCDF4>=1.6.0",     # tests/test_gridmet_ncss.py writes and reads NetCDF with this engine
     "rasterio>=1.3.0",
     "pyarrow>=14.0.0",
     "matplotlib>=3.7.0",
