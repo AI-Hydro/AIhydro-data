@@ -27,6 +27,8 @@ from aihydro_data.sources import _gridmet_ncss as ncss
 from aihydro_data.sources import hyriver
 from aihydro_data.sources._gridmet_ncss import GridmetRequestRejected, HttpResponse, NcssClient
 
+pytest.importorskip("netCDF4", reason="the NCSS client reads NetCDF with the netCDF4 engine")
+
 CELL = 1.0 / 24.0
 LON0, LAT0 = -124.7666667, 49.4
 # Fish River basin box from the DEMO-1 rehearsal (0.893 x 0.632 deg)
@@ -46,9 +48,9 @@ def _value(i: int, j: int, day: pd.Timestamp) -> float:
 def _netcdf3_bytes(ds) -> bytes:
     import os
     import tempfile
-    with tempfile.TemporaryDirectory() as d:           # file-backed: xarray's in-memory scipy writer
+    with tempfile.TemporaryDirectory() as d:           # file-backed (netCDF4 engine; CI has no scipy): xarray's in-memory scipy writer
         path = os.path.join(d, "r.nc")                 # leaves a BytesIO export that warns at GC
-        ds.to_netcdf(path, format="NETCDF3_CLASSIC", engine="scipy")
+        ds.to_netcdf(path, format="NETCDF3_CLASSIC", engine="netcdf4")
         with open(path, "rb") as fh:
             return fh.read()
 
@@ -118,6 +120,7 @@ def _expected_mean(geom, day) -> tuple[float, int, int]:
 
 
 def _client(server, **kw):
+    kw.setdefault("min_interval_s", 0.0)               # the production default is 1 s
     return NcssClient(http_get=server, **kw)
 
 
@@ -370,12 +373,7 @@ def test_backend_attaches_method_requests_and_hashes_for_the_result():
 
 def test_pipeline_surfaces_the_method_in_notes_and_upstream(monkeypatch):
     """End to end through fetch(): notes and upstream on the FetchResult."""
-    import sys
-    import types
-
     from aihydro_data import fetch
-    # is_available() still looks for the (unused) pygridmet install marker; CI may lack it
-    monkeypatch.setitem(sys.modules, "pygridmet", types.ModuleType("pygridmet"))
     server = FakeThredds()
     monkeypatch.setattr(hyriver, "_gridmet_client", lambda: _client(server))
     res = fetch("precipitation", FISH_POLY, "1999-10-01", "2000-09-30", mode="manual",
@@ -405,3 +403,27 @@ def test_request_url_has_the_ncss_contract():
     assert q["var"] == ["precipitation_amount"] and q["accept"] == ["netcdf"]
     assert q["time_start"] == q["time_end"] == ["2000-12-31T00:00:00Z"]
     assert (q["west"], q["east"], q["south"], q["north"]) == (["-68.966000"], ["-68.073000"], ["46.684000"], ["47.316000"])
+
+
+def test_default_throttle_is_about_one_second():
+    assert NcssClient(http_get=FakeThredds()).min_interval_s == ncss.DEFAULT_MIN_INTERVAL_S == 1.0
+
+
+def test_missing_engine_is_a_structured_error(monkeypatch):
+    import sys
+    canned = FakeThredds()(ncss.build_url("pr", FISH_POLY.bounds, "2000-01-03", "2000-01-03"), None)
+    monkeypatch.setitem(sys.modules, "netCDF4", None)           # after the fake wrote its bytes
+    with pytest.raises(AihydroDataError) as ei:
+        _client(lambda url, timeout: canned).get_bygeom(FISH_POLY, ("2000-01-03", "2000-01-03"), ["pr"])
+    assert ei.value.code == "HYRIVER_NOT_INSTALLED" and "aihydro-data[hyriver]" in ei.value.recovery
+
+
+def test_is_available_checks_the_real_gridmet_dependencies(monkeypatch):
+    import sys
+    from aihydro_data.products import get_product
+    spec = get_product("GRIDMET_PRECIP")
+    ok, _ = hyriver.Backend().is_available(spec)
+    assert ok is True
+    monkeypatch.setitem(sys.modules, "netCDF4", None)
+    ok, why = hyriver.Backend().is_available(spec)
+    assert ok is False and "netCDF4" in why and "hyriver" in why

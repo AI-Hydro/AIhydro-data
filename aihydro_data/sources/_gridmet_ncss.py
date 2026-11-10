@@ -2,7 +2,8 @@
 Direct GridMET client over the THREDDS NetCDF Subset Service (NCSS).
 
 Why this exists (evidence: docs/vision-2040/evidence/agu26-demo-1/rehearsal, FINDINGS F1,
-re-diagnosed 2026-11-10 with seven requests to the approved host):
+re-diagnosed 2026-11-10; evidence: docs/vision-2040/evidence/gridmet-ncss-probe-2026-11-10,
+7 diagnostic requests + 3 for the WY2000 / calendar-2000 check = 10 to the approved host):
 
 * ``pygridmet.get_bygeom`` treats ANY NaN in a downloaded file as a corrupt
   download: it deletes the file, downloads it again 15 times and then raises
@@ -39,7 +40,6 @@ Failure behaviour (all bounded, none silent):
 from __future__ import annotations
 
 import hashlib
-import io
 import logging
 import tempfile
 import time
@@ -57,10 +57,10 @@ MISSING_VALUE = 32767.0
 GRID_BOUNDS = (-124.7666, 25.0666, -67.0583, 49.4)     # west, south, east, north
 CELL_DEG = 1.0 / 24.0                                   # GridMET grid spacing
 
+DEFAULT_MIN_INTERVAL_S = 1.0       # courtesy gap between requests to the shared THREDDS host
 MAX_SPLIT_DEPTH = 4
 MAX_REQUESTS_PER_CALL = 48
 BASIN_MEAN_METHOD = "cell_centre_in_polygon_unweighted_mean"
-_INSIDE = "_aihydro_inside"
 
 # pygridmet 0.19.4 `GridMET.long_names`; a test compares this table with it.
 LONG_NAMES = {
@@ -113,16 +113,16 @@ def _excerpt(body: bytes, n: int = 300) -> str:
 
 
 def _open_netcdf(body: bytes) -> Any:
-    import xarray as xr
-    try:
-        with xr.open_dataset(io.BytesIO(body)) as ds:
-            return ds.load().copy(deep=True)         # scipy may view the buffer: own the memory
-    except (ValueError, ImportError, TypeError, OSError):
-        with tempfile.NamedTemporaryFile(suffix=".nc") as tmp:      # engine without file-like support
-            tmp.write(body)
-            tmp.flush()
-            with xr.open_dataset(tmp.name) as ds:
-                return ds.load().copy(deep=True)
+    """Read an NCSS NetCDF response with the netCDF4 engine (declared in the ``hyriver``
+    extra; it reads classic NetCDF-3 and NetCDF-4/HDF5, so scipy is not needed)."""
+    from aihydro_data.sources._common import require_import
+    xr = require_import("xarray", extra="hyriver", backend="hyriver")
+    require_import("netCDF4", extra="hyriver", backend="hyriver")
+    with tempfile.NamedTemporaryFile(suffix=".nc") as tmp:
+        tmp.write(body)
+        tmp.flush()
+        with xr.open_dataset(tmp.name, engine="netcdf4") as ds:
+            return ds.load().copy(deep=True)
 
 
 def build_url(abbr: str, bounds: tuple[float, float, float, float], start: Any, end: Any) -> str:
@@ -177,7 +177,7 @@ class NcssClient:
     """Stateful per fetch: one client, one ledger. ``http_get`` is the test seam."""
 
     def __init__(self, http_get: Optional[Callable[[str, Any], HttpResponse]] = None, *,
-                 min_interval_s: float = 0.0, timeout: Any = (10, 180),
+                 min_interval_s: float = DEFAULT_MIN_INTERVAL_S, timeout: Any = (10, 180),
                  max_requests_per_call: int = MAX_REQUESTS_PER_CALL,
                  max_split_depth: int = MAX_SPLIT_DEPTH) -> None:
         self._get = http_get or _requests_get
@@ -284,8 +284,10 @@ class NcssClient:
         if self.ledger.cells_in_geometry and has_data < self.ledger.cells_in_geometry:
             self.ledger.notes.append(
                 f"{self.ledger.cells_in_geometry - has_data} of {self.ledger.cells_in_geometry} grid "
-                f"cells inside the geometry have no GridMET data (outside the CONUS grid, e.g. Canada "
-                f"or open water); the basin mean is over the {has_data} cells that have data.")
+                f"cells inside the geometry have no GridMET data (NaN in the file: Canada or open "
+                f"water inside the grid); the basin mean is over the {has_data} cells that have "
+                f"data. Parts of the geometry beyond the grid's own extent have no cells at all "
+                f"and are not counted.")
         return clipped
 
     def get_bycoords(self, coords: tuple[float, float], dates: tuple[str, str],
@@ -350,32 +352,47 @@ def _tidy(raw: Any, abbr: str) -> Any:
 
 
 def _clip_to_geometry(ds: Any, geometry: Any) -> tuple[Any, bool, int]:
-    """Same rule as ``pygridmet._utils.clip_dataset``: box clip, then cell-centre-in-polygon.
-    A geometry that holds no cell centre (smaller than a cell) falls back to every cell it
-    touches. Returns ``(dataset, used_all_touched, cells_in_geometry)``; the cell count is
-    taken from a ones-layer clipped alongside the data, because clipped-out cells and cells
-    outside the GridMET grid are both NaN in the data itself."""
+    """Keep the cells whose CENTRE is inside ``geometry`` (the rule ``rio.clip`` applied in
+    the pygridmet path); cells elsewhere become NaN and the grid is cropped to the kept
+    cells. A geometry that holds no cell centre (smaller than a cell) falls back to every
+    cell it touches. Returns ``(dataset, used_all_touched, cells_in_geometry)``. The count
+    is of cells selected by the geometry, not of cells with data: cells outside the
+    GridMET grid are NaN in the data itself and are counted separately by the caller."""
     import numpy as np
-    import rioxarray  # noqa: F401  (registers .rio)
-    from rioxarray.exceptions import NoDataInBounds, OneDimensionalRaster
+    import shapely
 
     name = next(iter(ds.data_vars))
-    ds = ds.assign({_INSIDE: (("lat", "lon"), np.ones((ds.sizes["lat"], ds.sizes["lon"]), "float32"))})
-    ds = ds.rio.set_spatial_dims(x_dim="lon", y_dim="lat").rio.write_crs(4326)
+    lat, lon = ds["lat"].values, ds["lon"].values
+    lon2, lat2 = np.meshgrid(lon, lat)
     touched = False
-    if ds.rio.width <= 1 or ds.rio.height <= 1:
-        out, touched = ds.rio.clip([geometry], all_touched=True), True
+    if geometry.geom_type in ("Polygon", "MultiPolygon"):
+        mask = shapely.contains_xy(geometry, lon2, lat2)
+        if not mask.any():
+            touched = True
     else:
-        ds = ds.rio.clip_box(*geometry.bounds, auto_expand=True)
-        if geometry.geom_type not in ("Polygon", "MultiPolygon"):
-            out = ds
-        else:
-            try:
-                out = ds.rio.clip([geometry])
-            except (NoDataInBounds, OneDimensionalRaster):
-                out, touched = ds.rio.clip([geometry], all_touched=True), True
-    n_inside = int(out[_INSIDE].notnull().sum())
-    return out.drop_vars(_INSIDE)[[name]], touched, n_inside
+        mask = np.zeros(lon2.shape, bool)
+        touched = True
+    if touched:
+        hx, hy = _half_step(lon), _half_step(lat)
+        cells = shapely.box(lon2 - hx, lat2 - hy, lon2 + hx, lat2 + hy)
+        mask = shapely.intersects(cells, geometry)
+    rows, cols = np.where(mask)
+    if not len(rows):
+        return ds.isel(lat=slice(0, 0), lon=slice(0, 0)), touched, 0
+    sub = ds.isel(lat=slice(rows.min(), rows.max() + 1), lon=slice(cols.min(), cols.max() + 1))
+    m = mask[rows.min():rows.max() + 1, cols.min():cols.max() + 1]
+    sub = sub.assign({name: sub[name].where(_mask_array(m, sub))})
+    return sub, touched, int(mask.sum())
+
+
+def _half_step(axis: Any) -> float:
+    import numpy as np
+    return float(np.abs(np.diff(axis)).mean() / 2) if len(axis) > 1 else CELL_DEG / 2
+
+
+def _mask_array(m: Any, like: Any) -> Any:
+    import xarray as xr
+    return xr.DataArray(m, dims=("lat", "lon"), coords={"lat": like["lat"], "lon": like["lon"]})
 
 
 def _partial_nan_cells(da: Any) -> int:

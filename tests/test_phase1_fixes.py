@@ -236,10 +236,10 @@ class TestHyriverAvailability:
         import sys
         from aihydro_data.sources.hyriver import Backend
         # sys.modules[name] = None makes __import__(name) raise ImportError
-        monkeypatch.setitem(sys.modules, "pygridmet", None)
-        ok, reason = Backend().is_available(self._spec(pygridmet_variable="pr"))
+        monkeypatch.setitem(sys.modules, "pydaymet", None)
+        ok, reason = Backend().is_available(self._spec(pydaymet_variable="prcp"))
         assert ok is False
-        assert "pygridmet" in (reason or "")
+        assert "pydaymet" in (reason or "")
 
     def test_present_specific_lib_reports_available(self, monkeypatch):
         import sys

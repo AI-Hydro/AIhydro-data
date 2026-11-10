@@ -1,7 +1,7 @@
 """
 HyRiver backend.
 
-Wraps GridMET (direct THREDDS NCSS client, ``_gridmet_ncss``; pygridmet is not needed) and pydaymet (Daymet) for CONUS / North America
+Wraps GridMET (direct THREDDS NCSS client, ``_gridmet_ncss``; pygridmet is not used) and pydaymet (Daymet) for CONUS / North America
 precipitation and other meteorological variables. All HyRiver imports are
 lazy so this module is importable without the extra installed.
 
@@ -125,23 +125,24 @@ def _basin_aggregate_to_frame(data: Any, var_key: str, how: str = "mean") -> Any
 
 # ── Chunked, validated GridMET fetch ─────────────────────────────────────
 #
-# pygridmet 0.19.4 downloads one file per calendar year into a shared on-disk
-# cache named by sha256(url), merges them with xr.merge and retries only on
-# NaNs. A cache file holding the WRONG year (observed: the 1999 file contains
-# 2006) merges silently, dropping a whole year. We therefore fetch per calendar
-# year, check each chunk's time coordinate against its own request, retry a bad
-# chunk once with a fresh private cache directory, and never merge a chunk that
-# still fails. Evidence: docs/vision-2040/evidence/gridmet-chunk-defect-1.
+# History: pygridmet 0.19.4 downloaded one file per calendar year into a shared on-disk
+# cache named by sha256(url) and merged them with xr.merge. A cache file holding the
+# WRONG year (observed: the 1999 file contains 2006) merged silently, dropping a whole
+# year. Evidence: docs/vision-2040/evidence/gridmet-chunk-defect-1. GridMET no longer goes
+# through pygridmet (see sources/_gridmet_ncss.py: no on-disk cache, one request per
+# year), but the per-chunk validation stays because it checks the SERVED data against the
+# request whatever produced it: each chunk's time coordinate is checked against its own
+# request, a bad chunk is re-fetched once, and a chunk that still fails is never merged.
 #
-# Retry isolation: pygridmet reads HYRIVER_CACHE_NAME at call time
-# (`_utils.download_files`), and that env var is process-global inside the
-# long-running MCP server. We serialise GridMET calls under one process lock and
-# set/restore the variable inside it, rather than spawning a subprocess: a
-# subprocess would have to re-import the geospatial stack and pickle the
-# geometry for a rare path, and could not be exercised with an in-process
-# monkeypatched client. Cost: GridMET fetches in one process run one at a time.
-# Other HyRiver libraries called concurrently could write their cache into the
-# temporary directory during a retry; that only loses their cache entry.
+# The "fresh private cache" of the re-fetch is a HYRIVER_CACHE_NAME swap that matters
+# only to clients that cache on disk (pydaymet/pygeohydro/py3dep); for the NCSS client the
+# re-fetch is simply a second request. HYRIVER_CACHE_NAME is process-global inside the
+# long-running MCP server, so calls that use it run under one process lock and the
+# variable is set/restored inside it (no subprocess: it would have to re-import the
+# geospatial stack and could not be exercised with an in-process fake). Cost: such
+# fetches in one process run one at a time. Other HyRiver libraries called concurrently
+# could write their cache into the temporary directory during a retry; that only loses
+# their cache entry.
 _HYRIVER_ENV_LOCK = threading.RLock()
 _HYRIVER_CACHE_ENV = "HYRIVER_CACHE_NAME"
 
@@ -245,7 +246,7 @@ def _chunked_daily(fetch: Any, start: str, end: str, label: str, *,
             chunk, verdict = attempt(cs, ce, tail_edge)
             if verdict["status"] != "ok":
                 log.warning("%s chunk %s..%s failed validation (%s); retrying once "
-                            "with a private cache", label, cs.date(), ce.date(),
+                            "with a fresh request (private cache where the client uses one)", label, cs.date(), ce.date(),
                             "; ".join(verdict["problems"]))
                 with _private_hyriver_cache():
                     chunk2, verdict2 = attempt(cs, ce, tail_edge)
@@ -262,8 +263,8 @@ def _chunked_daily(fetch: Any, start: str, end: str, label: str, *,
 
     if not parts:
         raise RuntimeError(
-            f"{label}: every yearly chunk failed validation after one retry with a "
-            f"private cache ({failures}); nothing was merged.")
+            f"{label}: every yearly chunk failed validation after one re-fetch "
+            f"({failures}); nothing was merged.")
     first = parts[0]
     if len(parts) == 1:
         merged = first
@@ -326,15 +327,15 @@ def _attach_chunk_failures(out: Any, info: dict[str, Any]) -> Any:
             + ". See missing_ranges (reason chunk_mismatch). Not cached.")
     if retained:
         notes.append(
-            f"{sum(g['days'] for g in retained)} day(s) were still absent after a retry with a "
-            "private cache and are disclosed in missing_ranges (reason absent_after_retry). "
+            f"{sum(g['days'] for g in retained)} day(s) were still absent after one re-fetch "
+            "and are disclosed in missing_ranges (reason absent_after_retry). "
             "Not cached.")
     out.attrs["aihydro_notes"] = notes
     return out
 
 
 class Backend(SourceBackend):
-    """HyRiver backend (pygridmet + pydaymet)."""
+    """HyRiver backend (GridMET via NCSS; pydaymet, pygeohydro, py3dep)."""
 
     source_id = "hyriver"
 
@@ -350,19 +351,39 @@ class Backend(SourceBackend):
             "requires_extras": ["hyriver"],
         }
 
-    # backend_config key → the one HyRiver library that product actually needs
+    # backend_config key → the one HyRiver library that product actually needs.
+    # GridMET is NOT here: it goes through sources/_gridmet_ncss.py (see _GRIDMET_DEPS).
     _CFG_KEY_TO_LIB = {
-        "pygridmet_variable": "pygridmet",
         "pydaymet_variable": "pydaymet",
         "pygeohydro_product": "pygeohydro",
         "py3dep_resolution": "py3dep",
     }
+    # Modules the direct NCSS GridMET client imports; the NetCDF engine is netCDF4.
+    # (requests, shapely and numpy are base dependencies.)
+    _GRIDMET_DEPS = ("requests", "xarray", "netCDF4")
+
+    @classmethod
+    def _gridmet_missing(cls) -> Optional[str]:
+        for lib in cls._GRIDMET_DEPS:
+            try:
+                __import__(lib)
+            except ImportError:
+                return lib
+        return None
 
     def is_available(self, spec: Optional[ProductSpec] = None) -> tuple[bool, Optional[str]]:
         # Product-specific check: only the library that product routes through
         # matters. Without it, a machine with only py3dep installed would
         # report GridMET products as available and fail mid-fetch.
         if spec is not None:
+            if "pygridmet_variable" in spec.backend_config:
+                missing = self._gridmet_missing()
+                if missing:
+                    return False, (
+                        f"Product {spec.id!r} needs {missing!r}, which is not installed. "
+                        "Run `pip install aihydro-data[hyriver]`."
+                    )
+                return True, None
             libs = [lib for key, lib in self._CFG_KEY_TO_LIB.items()
                     if key in spec.backend_config]
             for lib in libs:
@@ -376,15 +397,17 @@ class Backend(SourceBackend):
                     )
             # Unknown config shape — fall through to the any-lib probe.
 
-        for lib in ("pygridmet", "pydaymet", "pygeohydro", "py3dep"):
+        if self._gridmet_missing() is None:
+            return True, None
+        for lib in ("pydaymet", "pygeohydro", "py3dep"):
             try:
                 __import__(lib)
                 return True, None
             except ImportError:
                 continue
         return False, (
-            "No HyRiver libraries found (pygridmet, pydaymet, pygeohydro, py3dep). "
-            "Run `pip install aihydro-data[hyriver]`."
+            "No HyRiver libraries found (pydaymet, pygeohydro, py3dep, or the GridMET client's "
+            f"{', '.join(self._GRIDMET_DEPS)}). Run `pip install aihydro-data[hyriver]`."
         )
 
     def fetch_timeseries(
