@@ -321,6 +321,23 @@ The pipeline enforces honesty:
 - `aggregation="basin_mean"` on a point/reach product is silently downgraded to `{support}_value` with an explicit note attached to the result (`FetchResult.notes`).
 - `FetchResult.spatial_support` and `FetchResult.aggregation_actual` surface the actual semantics so agents/users always know what the number means.
 
+## Data-nature model
+
+Alongside `spatial_support`, every `ProductSpec` declares `data_nature: Literal["gauge_observed", "gridded_obs_derived", "reanalysis", "modelled", "satellite_derived", "mapped"]`. It says what kind of knowledge the values are, independent of how they are supported in space. A registry test fails if any registered product leaves it undeclared; the field itself defaults to `None` so a new product cannot silently inherit a class.
+
+| `data_nature` | Meaning | Example products |
+|---|---|---|
+| `gauge_observed` | Direct in-situ measurement at a gauge or station | `NWIS_STREAMFLOW` |
+| `gridded_obs_derived` | A gridded surface produced by spatial interpolation of station observations, optionally combined with a gridded model or reanalysis for temporal or spatial detail | `DAYMET_*`, `GRIDMET_PRECIP`, `GRIDMET_TMAX/TMIN` |
+| `reanalysis` | Output of a weather or land-surface model with data assimilation, and variables computed purely from such output | `ERA5L_*`, `OPEN_METEO_*`, `GRIDMET_PET` |
+| `modelled` | Output of a process model (hydrological, water-balance or energy-balance), including satellite-driven ET models | `GEOGLOWS_RETRO`, `OPENMETEO_FLOOD`, `GLOFAS_STREAMFLOW`, `TERRACLIMATE_AET`, `MOD16_*`, `OPENET_ENSEMBLE` |
+| `satellite_derived` | Retrieved or classified directly from spaceborne sensor measurements; may be bias-adjusted with gauges | `MODIS_*`, `SENTINEL2_*`, `SMAP_SM`, `GLO30`, `NLCD`, `CHIRPS`, `IMERG_PRECIP` |
+| `mapped` | Static thematic, survey or inventory surfaces (geology, statistical or ML soil maps, census population grids, airborne or survey DEMs) | `PYGEOGLIM_ALL`, `POLARIS`, `SOILGRIDS`, `GHSL_POP`, `DEM3DEP_10M` |
+
+**Classification rule:** assign by the principal computing step that produces the value, not by the data's inputs or its accuracy. A variable computed from another product (for example PET) takes the class of its dominant meteorological forcing and is never `gauge_observed`. Gauge adjustment of a satellite or model product does not change its class. If two classes fit, choose the one that does not imply measurement, and record the reason in a comment beside `data_nature=`.
+
+Several products sit between classes (for example gridMET, CHIRPS, POLARIS); the comment beside each `data_nature=` in `aihydro_data/products/*.py` records the reasoning, and the classes describe provenance, not accuracy. `FetchResult.data_nature` mirrors the served product, is returned by the MCP result dict, and is stored in the cache manifest; results restored from entries written before this field report `""` (not recorded), never a value inferred from the current registry. `aihydro_data.contracts.is_observed_nature()` maps it onto the boolean `is_observed` of `aihydro-core`'s `AttrProvenance`: only `gauge_observed` is True.
+
 ## Verify-on-read cache
 
 Cache keys in auto mode exclude the product ID: the same (variable, geometry, start, end, aggregation) maps to the same key regardless of which product won. This is deliberate — the data are interchangeable for the same request.

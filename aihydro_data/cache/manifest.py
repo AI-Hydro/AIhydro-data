@@ -44,6 +44,7 @@ class ManifestEntry:
         data_file: str = "",
         notes: list[str] | None = None,
         spatial_support: str = "areal",
+        data_nature: str = "",
         aggregation_actual: str = "",
         product_identity: dict[str, Any] | None = None,
         fallback_history: list[dict[str, str]] | None = None,
@@ -69,6 +70,7 @@ class ManifestEntry:
         self.data_file = data_file
         self.notes = notes or []
         self.spatial_support = spatial_support
+        self.data_nature = data_nature
         self.aggregation_actual = aggregation_actual
         self.product_identity = product_identity or {}
         self.fallback_history = fallback_history or []
@@ -102,6 +104,7 @@ class ManifestEntry:
             "data_file": self.data_file,
             "notes": self.notes,
             "spatial_support": self.spatial_support,
+            "data_nature": self.data_nature,
             "aggregation_actual": self.aggregation_actual,
             "product_identity": self.product_identity,
             "fallback_history": self.fallback_history,
@@ -131,6 +134,7 @@ class ManifestEntry:
             data_file=d.get("data_file", ""),
             notes=d.get("notes", []),
             spatial_support=d.get("spatial_support", "areal"),
+            data_nature=d.get("data_nature", ""),
             aggregation_actual=d.get("aggregation_actual", ""),
             product_identity=d.get("product_identity", {}),
             fallback_history=d.get("fallback_history", []),

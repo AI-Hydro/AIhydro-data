@@ -133,6 +133,7 @@ def _result_to_dict(result: Any) -> dict[str, Any]:
         # Spatial-support honesty: tells the agent whether `data` is an areal
         # aggregate or a single-location (point/reach/gauge) series.
         "spatial_support": getattr(result, "spatial_support", "areal"),
+        "data_nature": getattr(result, "data_nature", ""),
         "aggregation_actual": getattr(result, "aggregation_actual", ""),
         # Observation provenance (Wave U): gauge resolution record, per-value quality
         # summary, upstream request/response provenance. Empty for products without any.

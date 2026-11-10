@@ -56,6 +56,9 @@ def _table(products: list, *, extra_cols: list[str] | None = None) -> str:
         sup = getattr(spec, "spatial_support", "areal")
         if sup != "areal":
             bits.append(f"spatial support: {sup}")
+        nat = getattr(spec, "data_nature", None)
+        if nat:
+            bits.append(f"nature: {nat}")
         return "; ".join(bits) or "—"
 
     def _val(spec, attr):
