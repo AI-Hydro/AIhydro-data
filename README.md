@@ -232,18 +232,18 @@ check = data_validate_request(
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `MOD16_PET` | gee | global | 500 m | monthly | GEE auth required; nature: satellite_derived |
+| `MOD16_PET` | gee | global | 500 m | monthly | GEE auth required; nature: modelled |
 | `ERA5L_PET` | gee | global | 11 km | daily | GEE auth required; nature: reanalysis |
-| `GRIDMET_PET` | hyriver | CONUS | 4 km | daily | auth-free; nature: gridded_obs_derived |
+| `GRIDMET_PET` | hyriver | CONUS | 4 km | daily | auth-free; nature: reanalysis |
 | `OPEN_METEO_PET` | direct_api | global | 25 km | daily | auth-free; spatial support: point; nature: reanalysis |
 
 ### Actual Evapotranspiration (ET) (3 products)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `MOD16_ET` | gee | global | 500 m | monthly | GEE auth required; nature: satellite_derived |
+| `MOD16_ET` | gee | global | 500 m | monthly | GEE auth required; nature: modelled |
 | `TERRACLIMATE_AET` | gee | global | 4 km | monthly | GEE auth required; nature: modelled |
-| `OPENET_ENSEMBLE` | gee | CONUS | 30 m | monthly | GEE auth required; nature: satellite_derived |
+| `OPENET_ENSEMBLE` | gee | CONUS | 30 m | monthly | GEE auth required; nature: modelled |
 
 ### DEM (6 products)
 

@@ -20,7 +20,74 @@ def _all_products():
     return list_products()
 
 
+# Full id -> class map. Any reclassification must change this table, so it shows
+# up in review. Reasons live in the comments beside data_nature= in the products.
+EXPECTED = {
+    "CHIRPS": "satellite_derived",
+    "CHIRPS_IRI": "satellite_derived",
+    "DAYMET_PRECIP": "gridded_obs_derived",
+    "DAYMET_TMAX": "gridded_obs_derived",
+    "DAYMET_TMIN": "gridded_obs_derived",
+    "DEM3DEP_10M": "mapped",
+    "DYNAMIC_WORLD": "satellite_derived",
+    "ERA5L_PET": "reanalysis",
+    "ERA5L_PRECIP": "reanalysis",
+    "ERA5L_TMAX": "reanalysis",
+    "ERA5L_TMEAN": "reanalysis",
+    "ERA5L_TMIN": "reanalysis",
+    "ESA_WORLDCOVER": "satellite_derived",
+    "ESA_WORLDCOVER_STAC": "satellite_derived",
+    "GEOGLOWS_RETRO": "modelled",
+    "GFM_S1_INUNDATION": "satellite_derived",
+    "GHSL_BUILT_UP": "satellite_derived",
+    "GHSL_POP": "mapped",
+    "GLHYMPS_TILES": "mapped",
+    "GLIM_TILES": "mapped",
+    "GLO30": "satellite_derived",
+    "GLO30_ELEMENT84": "satellite_derived",
+    "GLO30_STAC": "satellite_derived",
+    "GLOFAS_STREAMFLOW": "modelled",
+    "GPW_V411": "mapped",
+    "GRIDMET_PET": "reanalysis",
+    "GRIDMET_PRECIP": "gridded_obs_derived",
+    "GRIDMET_TMAX": "gridded_obs_derived",
+    "GRIDMET_TMIN": "gridded_obs_derived",
+    "IMERG_PRECIP": "satellite_derived",
+    "LANDSAT8_SR": "satellite_derived",
+    "LANDSAT9_SR": "satellite_derived",
+    "LANDSAT_SR_STAC": "satellite_derived",
+    "MERIT_DEM": "satellite_derived",
+    "MOD16_ET": "modelled",
+    "MOD16_PET": "modelled",
+    "MODIS_LAI": "satellite_derived",
+    "MODIS_NDVI": "satellite_derived",
+    "NLCD": "satellite_derived",
+    "NLCD_IMPERVIOUS": "satellite_derived",
+    "NWIS_STREAMFLOW": "gauge_observed",
+    "OPENET_ENSEMBLE": "modelled",
+    "OPENLANDMAP_BEDROCK": "mapped",
+    "OPENMETEO_FLOOD": "modelled",
+    "OPEN_METEO_PET": "reanalysis",
+    "OPEN_METEO_TMAX": "reanalysis",
+    "OPEN_METEO_TMIN": "reanalysis",
+    "POLARIS": "mapped",
+    "PYGEOGLIM_ALL": "mapped",
+    "SENTINEL2_NDVI": "satellite_derived",
+    "SENTINEL2_SR": "satellite_derived",
+    "SENTINEL2_SR_STAC": "satellite_derived",
+    "SMAP_SM": "satellite_derived",
+    "SOILGRIDS": "mapped",
+    "SRTM": "satellite_derived",
+    "TERRACLIMATE_AET": "modelled",
+    "WORLDPOP": "mapped",
+}
+
+
 class TestRegistryDeclaresDataNature:
+    def test_full_classification_map_is_pinned(self):
+        actual = {p.id: p.data_nature for p in _all_products()}
+        assert actual == EXPECTED
+
     def test_every_product_declares_a_valid_nature(self):
         missing = [p.id for p in _all_products() if not p.data_nature]
         assert not missing, f"products without data_nature: {missing}"
@@ -121,6 +188,49 @@ class TestCarriedIntoResult:
         assert ManifestEntry.from_dict(d).data_nature == "gauge_observed"
         d.pop("data_nature")  # entry written before this field existed
         assert ManifestEntry.from_dict(d).data_nature == ""
+
+    def _ts_result(self, nature):
+        req = FetchRequest(variable="streamflow", geometry=(39.1, -94.5),
+                           start="2020-01-01", end="2020-01-02")
+        df = pd.DataFrame({"date": pd.to_datetime(["2020-01-01", "2020-01-02"]),
+                           "streamflow": [1.0, 2.0]})
+        return FetchResult(variable="streamflow", product="NWIS_STREAMFLOW",
+                           source="direct_api", request=req, data=df,
+                           cache_key="naturekey000000000000", data_nature=nature,
+                           license="x", citation="c", bibtex="@misc{x}")
+
+    def test_cache_write_read_roundtrip(self, tmp_path):
+        from unittest.mock import patch
+        from aihydro_data.cache import cache_read, cache_write
+        with patch("aihydro_data.cache.cache_dir", return_value=tmp_path):
+            assert cache_write(self._ts_result("gauge_observed"),
+                               geom_wkt="POINT (-94.5 39.1)")
+            got = cache_read("naturekey000000000000")
+        assert got is not None and got.cache_hit
+        assert got.data_nature == "gauge_observed"
+
+    def test_legacy_manifest_without_key_reads_as_empty(self, tmp_path):
+        import json
+        from unittest.mock import patch
+        from aihydro_data.cache import cache_read, cache_write
+        with patch("aihydro_data.cache.cache_dir", return_value=tmp_path):
+            assert cache_write(self._ts_result("gauge_observed"),
+                               geom_wkt="POINT (-94.5 39.1)")
+            files = [f for f in tmp_path.rglob("*.json")
+                     if "data_nature" in f.read_text()]
+            assert files
+            for f in files:
+                def strip(o):
+                    if isinstance(o, dict):
+                        return {k: strip(v) for k, v in o.items() if k != "data_nature"}
+                    if isinstance(o, list):
+                        return [strip(v) for v in o]
+                    return o
+                f.write_text(json.dumps(strip(json.loads(f.read_text()))))
+            assert not any("data_nature" in f.read_text() for f in tmp_path.rglob("*.json"))
+            got = cache_read("naturekey000000000000")
+        assert got is not None
+        assert got.data_nature == ""
 
 
 class TestDocs:
