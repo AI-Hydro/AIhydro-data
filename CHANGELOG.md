@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed - registry citation and licence text for `GEOGLOWS_RETRO` and `NWIS_STREAMFLOW`
+
+- `GEOGLOWS_RETRO` `citation` and `bibtex` now cite Hales, R.C. et al., "Advancing global hydrologic modeling with the GEOGloWS ECMWF streamflow service", J. Flood Risk Manag. 18(1), e12859, doi:10.1111/jfr3.12859 (Crossref: published online 2022-10-05, print March 2025; the AWS Open Data registry entry `geoglows-v2` gives the same DOI as its Citation). The previous entry credited a 2023 "Ashby et al." author list to the GEOGLOWS website; that author list was not checked against any published source (not verified in this change).
+- `GEOGLOWS_RETRO` `license` now states CC BY 4.0 (per the AWS Open Data registry entry) and that attribution is required, instead of saying only "no licence acceptance". Access stays anonymous; the licence still obliges the user to credit the source.
+- `NWIS_STREAMFLOW` `common_pitfalls` no longer points to `GRDC_STREAMFLOW`, which does not exist. It now says global observed streamflow is not yet supported and names GRDC-Caravan (CC BY 4.0, Zenodo 10.5281/zenodo.15349031) as the planned source.
+- README product tables regenerated with `scripts/gen_product_tables.py`: no change (the tables do not carry citation, licence or pitfall text).
+
 ### Fixed - GridMET basin-mean fetch on border/coastal boxes, and the missing leap-year 31 December
 
 - **Root cause (corrects the rehearsal's reading).** The DEMO-1 rehearsal (finding F1) reported that THREDDS NCSS "answers HTTP 200 with an error body for any box of 0.18 deg or more". It does not. Live probes of the approved host (2026-11-10, 11 requests in all; artifacts under `docs/vision-2040/evidence/gridmet-ncss-probe-2026-11-10/`) show the server returns a valid NetCDF file for the whole 0.893 x 0.632 deg Fish River box. The failure is in `pygridmet`: it treats any NaN in a downloaded file as a corrupt download, deletes it, re-downloads 15 times, then raises "GridMET did NOT process your request successfully" (that string is pygridmet's, not the server's). GridMET has no data outside CONUS, so any box reaching Canada or the sea holds NaN cells and fails; the rehearsal's 0.15 deg box held none, its 0.18 deg box held one. With our retry layers (3 x 2 x 15, per chunk, then the pipeline's fall-through) one failing call cost about 270 requests.
