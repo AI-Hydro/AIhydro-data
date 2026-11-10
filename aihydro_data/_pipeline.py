@@ -754,9 +754,12 @@ RESULT_SCHEMA_VERSION = 5
 #                 windowed (non-static) Earth Engine product is listed, and a test walks the product
 #                 registry so a new one cannot be missed (population 1 added: GHSL/WorldPop/GPW
 #                 yearly windows).
+#   precipitation/tmax/tmin/pet 3: GridMET entries fetched through pygridmet lack 31 Dec of every
+#                 leap year (it never requests that day; the server holds it), so they are one day
+#                 short under the same key and must not be served (2026-11-10).
 _VARIABLE_CACHE_REVISION: dict[str, int] = {
     "impervious": 1, "dem": 1, "streamflow": 2,
-    "precipitation": 2, "tmax": 2, "tmin": 2, "pet": 2,
+    "precipitation": 3, "tmax": 3, "tmin": 3, "pet": 3,
     "tmean": 1, "soil_moisture": 1, "ndvi": 1, "lai": 1, "et": 1, "optical": 1, "population": 1,
 }
 

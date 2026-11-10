@@ -60,7 +60,7 @@ fetch("precipitation", watershed_gdf, "2020-01-01", "2020-12-31")
                │
                ▼
 ┌──────────────────────────────┐
-│  Backend.fetch_timeseries()  │  calls pygridmet with (lon, lat), date range
+│  Backend.fetch_timeseries()  │  calls the GridMET NCSS client with (lon, lat), date range
 │                              │  applies unit_conversion
 │                              │  → pd.DataFrame(columns=["date","precipitation"])
 └──────────────┬───────────────┘
@@ -194,12 +194,24 @@ Key flow:
 ### HyRiver backend (`sources/hyriver.py`)
 
 Thin wrappers around:
-- `pygridmet` — GridMET variables (precipitation, tmax, tmin, pet)
+- GridMET variables (precipitation, tmax, tmin, pet) through `sources/_gridmet_ncss.py`, a direct THREDDS NCSS client (see "GridMET transport" below); `pygridmet` stays the install marker of the `hyriver` extra but its downloader is not used
 - `pydaymet` — Daymet variables (precipitation, tmax, tmin)
 - `py3dep` — USGS 3DEP elevation
 - `pygeohydro` — NLCD land cover, POLARIS soil
 
-Coordinate order note: `pygridmet` expects `(lon, lat)`, not `(lat, lon)`.
+Coordinate order note: GridMET point fetches take `(lon, lat)`, not `(lat, lon)`.
+
+#### GridMET transport (`sources/_gridmet_ncss.py`)
+
+`pygridmet.get_bygeom` treats any NaN in a downloaded file as a corrupt download, deletes it, downloads again 15 times and raises "GridMET did NOT process your request successfully". GridMET has no data outside CONUS, so a box that reaches Canada or the sea always holds NaN cells and can never succeed; through our retry layers one failing call cost about 270 requests. (The DEMO-1 rehearsal read this as a 0.18 deg server limit: live probes on 2026-11-10 showed the server answers the whole 0.89 x 0.63 deg Fish River box with a valid NetCDF file, and that the 0.15 deg test box held no NaN cell while the 0.18 deg one held one.) It also never requests 31 December of leap years, which the server holds.
+
+The client therefore requests NCSS itself, one request per calendar-year chunk, and:
+
+- **Basin mean.** Cells whose centre is inside the polygon (`rio.clip`, same rule as before), plain unweighted mean over those that have data. Cells with no data (outside the grid) are counted, disclosed in the result notes and in `FetchResult.upstream["gridmet_ncss"]["basin_mean"]` (`method`, `cells_in_geometry`, `cells_with_data`, `cells_without_data`, `all_touched_fallback`). A geometry smaller than a cell falls back to the cells it touches and says so. Not area-weighted; a basin on the grid edge is averaged over its US part only.
+- **Error bodies.** A response that is not a NetCDF file (any status, including HTTP 200 with an error page) raises `GridmetRequestRejected` (`GRIDMET_REQUEST_REJECTED`, an `AihydroDataError`): never retried, body excerpt in `details`. The box is first split in two, up to 4 levels and 48 requests per call, in case a server size limit exists; a rejected one-cell box, or an exhausted budget (`GRIDMET_REQUEST_BUDGET_EXCEEDED`), raises. The error aborts the whole fetch, so a 40-year window does not make 40 failing calls and the router can fall through to another product.
+- **Retries.** 5xx and timeouts: 3 attempts (`call_with_retry`). A cell that is NaN on some days but not others (a flaky download; permanent NaN is outside the grid) is re-requested once, then disclosed.
+- **Leap days.** Every calendar day is requested, 31 December of leap years included. A day the server does not return is counted (`missing_ranges`, `days_missing_internal`) and reported; nothing is filled. GridMET is no longer a `skips_leap_dec31` product (Daymet is: its calendar has 365 days).
+- **Provenance.** Request URLs, response SHA-256s and their digest are recorded in `upstream`, `pygridmet_used: false`. Cache revision of precipitation/tmax/tmin/pet is 3, so entries fetched through pygridmet (one day short per leap year) are not served.
 
 ### Direct API backend (`sources/direct_api.py`)
 

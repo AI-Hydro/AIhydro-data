@@ -1,7 +1,8 @@
 """
 HyRiver backend.
 
-Wraps pygridmet (GridMET) and pydaymet (Daymet) for CONUS / North America
+Wraps GridMET (direct THREDDS NCSS client, ``_gridmet_ncss``; pygridmet stays the
+install marker) and pydaymet (Daymet) for CONUS / North America
 precipitation and other meteorological variables. All HyRiver imports are
 lazy so this module is importable without the extra installed.
 
@@ -188,8 +189,8 @@ def _times_of(obj: Any) -> Any:
 _RANK = {"ok": 0, "gappy": 1, "bad": 2}
 
 
-def _chunked_daily(fetch: Any, start: str, end: str, label: str
-                   ) -> tuple[Any, dict[str, Any]]:
+def _chunked_daily(fetch: Any, start: str, end: str, label: str, *,
+                   skip_leap_dec31: bool = False) -> tuple[Any, dict[str, Any]]:
     """Fetch ``[start, end]`` per calendar year and validate each chunk.
 
     Rule per chunk (``dv.check_daily_chunk``):
@@ -204,8 +205,11 @@ def _chunked_daily(fetch: Any, start: str, end: str, label: str
         ``chunk_mismatch`` (also not cached).
     A tail shortfall is tolerated (archive extent) only in the final chunk of a request
     ending within ``dv.RECENT_PUBLICATION_DAYS`` of today; elsewhere it is truncation.
-    Leap-year Dec 31 is never expected (pygridmet does not request it); a chunk
-    that is only that day is skipped. Returns ``(merged, info)`` with
+    Every calendar day is expected, including 31 Dec of leap years: the GridMET server
+    holds it (verified live, 2026-11-10), and the old assumption that it does not is
+    what made every leap year one day short. ``skip_leap_dec31=True`` is for a
+    source whose calendar really lacks the day. A day that is absent is counted and
+    reported (``missing_ranges`` / ``days_missing_internal``), never filled. Returns ``(merged, info)`` with
     ``info = {"failures": [...], "retained_gaps": [...]}``; raises if no chunk
     survives or the merge would contain duplicate days.
     """
@@ -215,16 +219,16 @@ def _chunked_daily(fetch: Any, start: str, end: str, label: str
     from aihydro_data import _daily_validation as dv
     from aihydro_data.exceptions import AihydroDataError
 
-    chunks = dv.year_chunks(start, end, skip_leap_dec31=True)
+    chunks = dv.year_chunks(start, end, skip_leap_dec31=skip_leap_dec31)
     if not chunks:
-        raise ValueError(f"{label}: {start}..{end} contains no day the client requests "
+        raise ValueError(f"{label}: {start}..{end} contains no day the source holds "
                          f"(leap-year Dec 31 only).")
 
     def attempt(cs: Any, ce: Any, tail_edge: bool) -> tuple[Any, dict[str, Any]]:
         try:
             chunk = fetch(str(cs.date()), str(ce.date()))
             return chunk, dv.check_daily_chunk(
-                _times_of(chunk), cs, ce, tail_is_archive_edge=tail_edge, skip_leap_dec31=True)
+                _times_of(chunk), cs, ce, tail_is_archive_edge=tail_edge, skip_leap_dec31=skip_leap_dec31)
         except AihydroDataError:
             raise                                   # terminal/structured: not a cache problem
         except Exception as exc:                    # noqa: BLE001 - recorded, not hidden
@@ -268,11 +272,45 @@ def _chunked_daily(fetch: Any, start: str, end: str, label: str
         merged = pd.concat(parts)
     else:
         merged = xr.concat(parts, dim=_find_time_dim(first))
-    final = dv.validate_daily_series(_times_of(merged), start, end, skip_leap_dec31=True)
+    final = dv.validate_daily_series(_times_of(merged), start, end,
+                                     skip_leap_dec31=skip_leap_dec31)
     if final["duplicates"]:
         raise RuntimeError(f"{label}: merged series has {final['duplicates']} duplicate "
                            f"timestamp(s); refusing to return it.")
     return merged, {"failures": failures, "retained_gaps": retained}
+
+
+def _gridmet_client() -> Any:
+    """The GridMET transport for one fetch (a fresh client, so a fresh ledger). Tests
+    replace this function; see ``sources/_gridmet_ncss.py`` for why pygridmet's own
+    downloader is not used."""
+    from aihydro_data.sources._gridmet_ncss import NcssClient
+    return NcssClient()
+
+
+def _attach_gridmet_provenance(out: Any, client: Any) -> Any:
+    """Copy what the NCSS client recorded (requests, response hashes, basin-mean
+    method and cell counts, disclosures) onto the result's attrs."""
+    ledger = getattr(client, "ledger", None)
+    if ledger is None:
+        return out
+    out.attrs["aihydro_upstream"] = {**dict(out.attrs.get("aihydro_upstream", {}) or {}),
+                                     **ledger.upstream()}
+    notes = list(out.attrs.get("aihydro_notes", []))
+    for n in dict.fromkeys(ledger.notes):
+        notes.append(n)
+    bm = ledger.upstream()["gridmet_ncss"]["basin_mean"]
+    if bm["cells_in_geometry"] is not None:
+        notes.append(
+            f"GridMET basin value: {bm['method']} over {bm['cells_with_data']} of "
+            f"{bm['cells_in_geometry']} grid cells (1/24 deg) whose centre is inside the geometry"
+            + (" (geometry holds no cell centre: every cell it touches was used)"
+               if bm["all_touched_fallback"] else "")
+            + ". Cells are not area-weighted. Fetched directly from THREDDS NCSS "
+              f"({len(ledger.request_urls)} request(s))"
+            + (f", {ledger.splits} split(s)" if ledger.splits else "") + ".")
+    out.attrs["aihydro_notes"] = notes
+    return out
 
 
 def _attach_chunk_failures(out: Any, info: dict[str, Any]) -> Any:
@@ -408,24 +446,25 @@ class Backend(SourceBackend):
         end: str,
         aggregation: AggregationMode,
     ) -> Any:
-        pygridmet = require_import("pygridmet", extra="hyriver", backend="hyriver")
+        require_import("pygridmet", extra="hyriver", backend="hyriver")   # the extra stays the install marker
 
         import pandas as pd
 
         from aihydro_data.sources._retry import call_with_retry
         var_key = cfg["pygridmet_variable"]
+        client = _gridmet_client()
         _failures: dict[str, Any] = {}
 
         if aggregation == "centroid":
             # Point-mode fetch: extract at geometry centroid
             c = geometry.centroid
-            coords = (c.x, c.y)   # pygridmet expects (lon, lat) — verified live
+            coords = (c.x, c.y)   # (lon, lat)
             df, _failures = _chunked_daily(
                 lambda a, b: call_with_retry(
-                    lambda: pygridmet.get_bycoords(coords, dates=(a, b), variables=[var_key]),
-                    label="pygridmet.get_bycoords",
+                    lambda: client.get_bycoords(coords, dates=(a, b), variables=[var_key]),
+                    label="gridmet.get_bycoords",
                 ),
-                start, end, "pygridmet.get_bycoords",
+                start, end, "gridmet.get_bycoords",
             )
         else:
             # Polygon-mode: spatial mean over the geometry
@@ -433,12 +472,12 @@ class Backend(SourceBackend):
             gdf = gpd.GeoDataFrame(geometry=[geometry], crs="EPSG:4326")
             df, _failures = _chunked_daily(
                 lambda a, b: call_with_retry(
-                    lambda: pygridmet.get_bygeom(
+                    lambda: client.get_bygeom(
                         gdf.geometry.iloc[0], dates=(a, b), variables=[var_key],
                     ),
-                    label="pygridmet.get_bygeom",
+                    label="gridmet.get_bygeom",
                 ),
-                start, end, "pygridmet.get_bygeom",
+                start, end, "gridmet.get_bygeom",
             )
             # Spatial aggregation. get_bygeom returns an xarray.Dataset, so
             # reduce over the spatial dims (dim=[...]) rather than axis=1.
@@ -463,7 +502,7 @@ class Backend(SourceBackend):
             df = df[["date", num_cols[0]]].rename(columns={num_cols[0]: out_col})
 
         df["date"] = pd.to_datetime(df["date"])
-        return _attach_chunk_failures(df, _failures)
+        return _attach_gridmet_provenance(_attach_chunk_failures(df, _failures), client)
 
     def _fetch_gridmet_raster(
         self,
@@ -473,21 +512,22 @@ class Backend(SourceBackend):
         start: str,
         end: str,
     ) -> Any:
-        pygridmet = require_import("pygridmet", extra="hyriver", backend="hyriver")
+        require_import("pygridmet", extra="hyriver", backend="hyriver")
 
         import geopandas as gpd
         var_key = cfg["pygridmet_variable"]
         gdf = gpd.GeoDataFrame(geometry=[geometry], crs="EPSG:4326")
         from aihydro_data.sources._retry import call_with_retry
+        client = _gridmet_client()
         ds, failures = _chunked_daily(
             lambda a, b: call_with_retry(
-                lambda: pygridmet.get_bygeom(gdf.geometry.iloc[0], dates=(a, b),
-                                             variables=[var_key]),
-                label="pygridmet.get_bygeom",
+                lambda: client.get_bygeom(gdf.geometry.iloc[0], dates=(a, b),
+                                          variables=[var_key]),
+                label="gridmet.get_bygeom",
             ),
-            start, end, "pygridmet.get_bygeom",
+            start, end, "gridmet.get_bygeom",
         )
-        return _attach_chunk_failures(ds, failures)
+        return _attach_gridmet_provenance(_attach_chunk_failures(ds, failures), client)
 
     # ── Daymet ───────────────────────────────────────────────────────────
 

@@ -3,18 +3,18 @@
 A daily product fetched as several chunks (one per calendar year) can come
 back wrong without any error: a chunk can hold another year's days (observed
 with pygridmet 0.19.4, see docs/vision-2040/evidence/gridmet-chunk-defect-1),
-and a client can skip days it believes do not exist. Merging such chunks
+and a client can skip days it believes do not exist (pygridmet and 31 Dec of leap years). Merging such chunks
 yields a series that looks fine and is not. These helpers check the result
 against the *requested* calendar, whatever produced it, and name each gap
 with a reason code instead of guessing a cause.
 
 Reason codes carried by ``missing_ranges``:
 
-``client_calendar_assumption``  the client library never asked for the day
-    (pygridmet skips Dec 31 in leap years). Whether GridMET itself lacks the day
-    is unverified, so it is not reported as missing in the source. For Daymet the
-    SOURCE has no 31 Dec in leap years (365-day calendar); the same code is used, and it
-    means "the product cannot hold this day", not "the client did not ask".
+``client_calendar_assumption``  the product's calendar has no such day: Daymet has no 31 Dec
+    in leap years (365-day calendar). The name is historical: it first described pygridmet,
+    which never requested 31 Dec of leap years although GridMET holds it (verified live
+    2026-11-10). GridMET no longer uses this code: its 31 Dec is requested, and when it is
+    absent it is ``absent_in_response`` and counts against coverage.
 ``chunk_mismatch``              a chunk was rejected (wrong time range or
     duplicate) and not merged; its days are absent from the result.
 ``absent_in_response``          the day is simply not in the returned series.
@@ -44,17 +44,15 @@ def is_daily(timestep: str) -> bool:
 
 
 def skips_leap_dec31(spec: Any) -> bool:
-    """True when the product never holds 31 Dec of a leap year.
+    """True when the product's calendar never holds 31 Dec of a leap year.
 
     Daymet's calendar is 365 days a year (it drops 31 Dec in leap years), a property of the
-    source; pygridmet never requests that day (unverified for GridMET itself, so only
-    disclosed). Both are HyRiver products; a day the product cannot hold is listed in
-    ``missing_ranges`` but is not a coverage failure.
+    source; that day is listed in ``missing_ranges`` but is not a coverage failure. GridMET
+    is NOT in this class: it holds 31 Dec of leap years, and is fetched with it.
     """
     try:
         cfg = spec.backend_config or {}
-        return (getattr(spec, "source", "") == "hyriver"
-                and ("pygridmet_variable" in cfg or "pydaymet_variable" in cfg))
+        return getattr(spec, "source", "") == "hyriver" and "pydaymet_variable" in cfg
     except Exception:
         return False
 
@@ -199,8 +197,8 @@ def year_chunks(start: str, end: str, *, skip_leap_dec31: bool = False
     """Split [start, end] at calendar-year boundaries.
 
     With ``skip_leap_dec31`` a chunk that is only a leap-year Dec 31 is dropped:
-    the client library would request nothing for it (pygridmet returns ``[]``).
-    Those days surface as ``client_calendar_assumption`` in ``missing_ranges``.
+    the source has no such day (Daymet). Those days surface as
+    ``client_calendar_assumption`` in ``missing_ranges``.
     """
     s, e = pd.Timestamp(start), pd.Timestamp(end)
     out = []
