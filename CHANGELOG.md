@@ -3,7 +3,7 @@
 All notable changes to `aihydro-data` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.2.10] - 2026-11-10
 
 ### Fixed - registry citation and licence text for `GEOGLOWS_RETRO` and `NWIS_STREAMFLOW`
 
