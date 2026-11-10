@@ -17,6 +17,7 @@ PRODUCTS: list[ProductSpec] = [
         id="GFM_S1_INUNDATION",
         variable="flood_inundation",
         source="direct_api",
+        data_nature="satellite_derived",  # Sentinel-1 SAR flood mapping
         source_dataset_id="gfm_sentinel1_stac",
         coverage=["global"],
         temporal_start="2014-01-01",

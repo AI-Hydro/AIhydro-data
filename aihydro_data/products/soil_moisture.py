@@ -21,6 +21,7 @@ PRODUCTS: list[ProductSpec] = [
         id="SMAP_SM",
         variable="soil_moisture",
         source="gee",
+        data_nature="satellite_derived",  # SMAP radiometer retrieval
         source_dataset_id="NASA/SMAP/SPL3SMP_E/006",
         coverage=["global"],
         temporal_start="2015-03-31",

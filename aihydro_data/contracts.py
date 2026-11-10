@@ -56,6 +56,33 @@ AggregationMode = Literal[
 #   gauge_point  — observed value at a physical gauge (NWIS)
 SpatialSupport = Literal["areal", "point", "reach", "gauge_point"]
 
+# What kind of knowledge the values are: the observed-vs-modelled label every
+# registered product declares, independent of spatial support (P1, H005 plan):
+#   gauge_observed      — measured at a physical gauge or station (NWIS)
+#   gridded_obs_derived — gridded surface built from station observations, by
+#                         interpolation or blending (Daymet, gridMET)
+#   reanalysis          — model-assimilation reconstruction of the atmosphere or
+#                         land surface (ERA5-Land, Open-Meteo archive)
+#   modelled            — output of a hydrological/water-balance model, not
+#                         directly constrained by local observation (GEOGLOWS, GloFAS)
+#   satellite_derived   — retrieved or classified from spaceborne sensor data
+#                         (MODIS, Sentinel, Landsat, SMAP, IMERG, GLO-30)
+#   mapped              — thematic or survey maps and gridded inventories
+#                         (geology, soils, census population)
+# Several products sit between classes; the product module comments say why a
+# product was put where it is.
+DataNature = Literal[
+    "gauge_observed", "gridded_obs_derived", "reanalysis",
+    "modelled", "satellite_derived", "mapped",
+]
+
+
+def is_observed_nature(data_nature: str) -> bool:
+    """Map ``data_nature`` onto the boolean ``is_observed`` that aihydro-core's
+    ``AttrProvenance`` uses ("True for gauge/station observations"). Only
+    ``gauge_observed`` is True; an undeclared (empty) nature is False."""
+    return data_nature == "gauge_observed"
+
 
 class ProductSpec(BaseModel):
     """
@@ -96,6 +123,15 @@ class ProductSpec(BaseModel):
             "basin_mean/basin_sum over the geometry; 'point'/'reach'/'gauge_point' "
             "return a single-location series regardless of the geometry, so "
             "basin_sum is rejected and basin_mean is reported as a point value."
+        ),
+    )
+    data_nature: Optional[DataNature] = Field(
+        None,
+        description=(
+            "What kind of knowledge the values are: gauge_observed, "
+            "gridded_obs_derived, reanalysis, modelled, satellite_derived or "
+            "mapped. Orthogonal to spatial_support. None = not declared; every "
+            "registered product declares it (enforced by a registry test)."
         ),
     )
     allow_empty: bool = Field(
@@ -200,6 +236,9 @@ class FetchResult(BaseModel):
     # never mistake a single-cell series for a catchment aggregate.
     spatial_support: str = "areal"
     aggregation_actual: str = ""
+    # Mirrors the served ProductSpec.data_nature. "" = not recorded (results
+    # restored from a cache entry written before this field existed).
+    data_nature: str = ""
 
     # Unit and support honesty. These mirror the served ProductSpec. Without
     # them a caller holding `data` cannot tell mm/day from mm/hr, or Kelvin

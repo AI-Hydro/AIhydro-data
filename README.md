@@ -197,153 +197,153 @@ check = data_validate_request(
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `CHIRPS` | gee | global | 5 km | daily | GEE auth required |
-| `IMERG_PRECIP` | gee | global | 11 km | daily | GEE auth required |
-| `ERA5L_PRECIP` | gee | global | 11 km | daily | GEE auth required |
-| `GRIDMET_PRECIP` | hyriver | CONUS | 4 km | daily | auth-free |
-| `DAYMET_PRECIP` | hyriver | NORTH_AMERICA | 1 km | daily | auth-free |
-| `CHIRPS_IRI` | direct_api | global | 5 km | daily | auth-free |
+| `CHIRPS` | gee | global | 5 km | daily | GEE auth required; nature: satellite_derived |
+| `IMERG_PRECIP` | gee | global | 11 km | daily | GEE auth required; nature: satellite_derived |
+| `ERA5L_PRECIP` | gee | global | 11 km | daily | GEE auth required; nature: reanalysis |
+| `GRIDMET_PRECIP` | hyriver | CONUS | 4 km | daily | auth-free; nature: gridded_obs_derived |
+| `DAYMET_PRECIP` | hyriver | NORTH_AMERICA | 1 km | daily | auth-free; nature: gridded_obs_derived |
+| `CHIRPS_IRI` | direct_api | global | 5 km | daily | auth-free; nature: satellite_derived |
 
 ### Temperature — Tmax (4 products)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `GRIDMET_TMAX` | hyriver | CONUS | 4 km | daily | auth-free |
-| `DAYMET_TMAX` | hyriver | NORTH_AMERICA | 1 km | daily | auth-free |
-| `ERA5L_TMAX` | gee | global | 11 km | daily | GEE auth required |
-| `OPEN_METEO_TMAX` | direct_api | global | 25 km | daily | auth-free; spatial support: point |
+| `GRIDMET_TMAX` | hyriver | CONUS | 4 km | daily | auth-free; nature: gridded_obs_derived |
+| `DAYMET_TMAX` | hyriver | NORTH_AMERICA | 1 km | daily | auth-free; nature: gridded_obs_derived |
+| `ERA5L_TMAX` | gee | global | 11 km | daily | GEE auth required; nature: reanalysis |
+| `OPEN_METEO_TMAX` | direct_api | global | 25 km | daily | auth-free; spatial support: point; nature: reanalysis |
 
 ### Temperature — Tmin (4 products)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `GRIDMET_TMIN` | hyriver | CONUS | 4 km | daily | auth-free |
-| `DAYMET_TMIN` | hyriver | NORTH_AMERICA | 1 km | daily | auth-free |
-| `ERA5L_TMIN` | gee | global | 11 km | daily | GEE auth required |
-| `OPEN_METEO_TMIN` | direct_api | global | 25 km | daily | auth-free; spatial support: point |
+| `GRIDMET_TMIN` | hyriver | CONUS | 4 km | daily | auth-free; nature: gridded_obs_derived |
+| `DAYMET_TMIN` | hyriver | NORTH_AMERICA | 1 km | daily | auth-free; nature: gridded_obs_derived |
+| `ERA5L_TMIN` | gee | global | 11 km | daily | GEE auth required; nature: reanalysis |
+| `OPEN_METEO_TMIN` | direct_api | global | 25 km | daily | auth-free; spatial support: point; nature: reanalysis |
 
 ### Temperature — Tmean (1 product)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `ERA5L_TMEAN` | gee | global | 11 km | daily | GEE auth required |
+| `ERA5L_TMEAN` | gee | global | 11 km | daily | GEE auth required; nature: reanalysis |
 
 ### Potential Evapotranspiration (PET) (4 products)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `MOD16_PET` | gee | global | 500 m | monthly | GEE auth required |
-| `ERA5L_PET` | gee | global | 11 km | daily | GEE auth required |
-| `GRIDMET_PET` | hyriver | CONUS | 4 km | daily | auth-free |
-| `OPEN_METEO_PET` | direct_api | global | 25 km | daily | auth-free; spatial support: point |
+| `MOD16_PET` | gee | global | 500 m | monthly | GEE auth required; nature: satellite_derived |
+| `ERA5L_PET` | gee | global | 11 km | daily | GEE auth required; nature: reanalysis |
+| `GRIDMET_PET` | hyriver | CONUS | 4 km | daily | auth-free; nature: gridded_obs_derived |
+| `OPEN_METEO_PET` | direct_api | global | 25 km | daily | auth-free; spatial support: point; nature: reanalysis |
 
 ### Actual Evapotranspiration (ET) (3 products)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `MOD16_ET` | gee | global | 500 m | monthly | GEE auth required |
-| `TERRACLIMATE_AET` | gee | global | 4 km | monthly | GEE auth required |
-| `OPENET_ENSEMBLE` | gee | CONUS | 30 m | monthly | GEE auth required |
+| `MOD16_ET` | gee | global | 500 m | monthly | GEE auth required; nature: satellite_derived |
+| `TERRACLIMATE_AET` | gee | global | 4 km | monthly | GEE auth required; nature: modelled |
+| `OPENET_ENSEMBLE` | gee | CONUS | 30 m | monthly | GEE auth required; nature: satellite_derived |
 
 ### DEM (6 products)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `GLO30` | gee | global | 30 m | static | GEE auth required |
-| `SRTM` | gee | global | 30 m | static | GEE auth required |
-| `DEM3DEP_10M` | hyriver | CONUS | 10 m | static | auth-free |
-| `MERIT_DEM` | gee | global | 90 m | static | GEE auth required |
-| `GLO30_STAC` | stac | global | 30 m | static | auth-free |
-| `GLO30_ELEMENT84` | stac | global | 30 m | static | auth-free |
+| `GLO30` | gee | global | 30 m | static | GEE auth required; nature: satellite_derived |
+| `SRTM` | gee | global | 30 m | static | GEE auth required; nature: satellite_derived |
+| `DEM3DEP_10M` | hyriver | CONUS | 10 m | static | auth-free; nature: mapped |
+| `MERIT_DEM` | gee | global | 90 m | static | GEE auth required; nature: satellite_derived |
+| `GLO30_STAC` | stac | global | 30 m | static | auth-free; nature: satellite_derived |
+| `GLO30_ELEMENT84` | stac | global | 30 m | static | auth-free; nature: satellite_derived |
 
 ### Soil Moisture (1 product)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `SMAP_SM` | gee | global | 9 km | daily | GEE auth required |
+| `SMAP_SM` | gee | global | 9 km | daily | GEE auth required; nature: satellite_derived |
 
 ### Land Cover (4 products)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `NLCD` | hyriver | CONUS | 30 m | static | auth-free |
-| `ESA_WORLDCOVER` | gee | global | 10 m | static | GEE auth required |
-| `DYNAMIC_WORLD` | gee | global | 10 m | static | GEE auth required |
-| `ESA_WORLDCOVER_STAC` | stac | global | 10 m | static | auth-free |
+| `NLCD` | hyriver | CONUS | 30 m | static | auth-free; nature: satellite_derived |
+| `ESA_WORLDCOVER` | gee | global | 10 m | static | GEE auth required; nature: satellite_derived |
+| `DYNAMIC_WORLD` | gee | global | 10 m | static | GEE auth required; nature: satellite_derived |
+| `ESA_WORLDCOVER_STAC` | stac | global | 10 m | static | auth-free; nature: satellite_derived |
 
 ### Soil Properties (2 products)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `POLARIS` | hyriver | CONUS | 30 m | static | auth-free |
-| `SOILGRIDS` | gee | global | 250 m | static | GEE auth required |
+| `POLARIS` | hyriver | CONUS | 30 m | static | auth-free; nature: mapped |
+| `SOILGRIDS` | gee | global | 250 m | static | GEE auth required; nature: mapped |
 
 ### NDVI (2 products)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `MODIS_NDVI` | gee | global | 250 m | monthly | GEE auth required |
-| `SENTINEL2_NDVI` | gee | global | 10 m | monthly | GEE auth required |
+| `MODIS_NDVI` | gee | global | 250 m | monthly | GEE auth required; nature: satellite_derived |
+| `SENTINEL2_NDVI` | gee | global | 10 m | monthly | GEE auth required; nature: satellite_derived |
 
 ### LAI (1 product)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `MODIS_LAI` | gee | global | 500 m | monthly | GEE auth required |
+| `MODIS_LAI` | gee | global | 500 m | monthly | GEE auth required; nature: satellite_derived |
 
 ### Optical (5 products)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `SENTINEL2_SR` | gee | global | 10 m | composite | GEE auth required |
-| `LANDSAT9_SR` | gee | global | 30 m | composite | GEE auth required |
-| `LANDSAT8_SR` | gee | global | 30 m | composite | GEE auth required |
-| `SENTINEL2_SR_STAC` | stac | global | 10 m | composite | auth-free |
-| `LANDSAT_SR_STAC` | stac | global | 30 m | composite | auth-free |
+| `SENTINEL2_SR` | gee | global | 10 m | composite | GEE auth required; nature: satellite_derived |
+| `LANDSAT9_SR` | gee | global | 30 m | composite | GEE auth required; nature: satellite_derived |
+| `LANDSAT8_SR` | gee | global | 30 m | composite | GEE auth required; nature: satellite_derived |
+| `SENTINEL2_SR_STAC` | stac | global | 10 m | composite | auth-free; nature: satellite_derived |
+| `LANDSAT_SR_STAC` | stac | global | 30 m | composite | auth-free; nature: satellite_derived |
 
 ### Streamflow (4 products)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `NWIS_STREAMFLOW` | direct_api | CONUS | 0 m | daily | auth-free; spatial support: gauge_point |
-| `GEOGLOWS_RETRO` | geoglows_retro | global | 0 m | daily | auth-free; spatial support: reach |
-| `OPENMETEO_FLOOD` | openmeteo_flood | global | 5 km | daily | auth-free; spatial support: reach |
-| `GLOFAS_STREAMFLOW` | cds_glofas | global | 5 km | daily | spatial support: reach |
+| `NWIS_STREAMFLOW` | direct_api | CONUS | 0 m | daily | auth-free; spatial support: gauge_point; nature: gauge_observed |
+| `GEOGLOWS_RETRO` | geoglows_retro | global | 0 m | daily | auth-free; spatial support: reach; nature: modelled |
+| `OPENMETEO_FLOOD` | openmeteo_flood | global | 5 km | daily | auth-free; spatial support: reach; nature: modelled |
+| `GLOFAS_STREAMFLOW` | cds_glofas | global | 5 km | daily | spatial support: reach; nature: modelled |
 
 ### Bedrock Depth (1 product)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `OPENLANDMAP_BEDROCK` | gee | global | 250 m | static | GEE auth required |
+| `OPENLANDMAP_BEDROCK` | gee | global | 250 m | static | GEE auth required; nature: mapped |
 
 ### Flood Inundation (1 product)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `GFM_S1_INUNDATION` | direct_api | global | 20 m | event | auth-free |
+| `GFM_S1_INUNDATION` | direct_api | global | 20 m | event | auth-free; nature: satellite_derived |
 
 ### Geology (3 products)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `PYGEOGLIM_ALL` | pygeoglim | global | 0 m | static | auth-free |
-| `GLIM_TILES` | pygeoglim | global | 0 m | static | auth-free |
-| `GLHYMPS_TILES` | pygeoglim | global | 0 m | static | auth-free |
+| `PYGEOGLIM_ALL` | pygeoglim | global | 0 m | static | auth-free; nature: mapped |
+| `GLIM_TILES` | pygeoglim | global | 0 m | static | auth-free; nature: mapped |
+| `GLHYMPS_TILES` | pygeoglim | global | 0 m | static | auth-free; nature: mapped |
 
 ### Impervious (2 products)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `NLCD_IMPERVIOUS` | hyriver | CONUS | 30 m | static | auth-free |
-| `GHSL_BUILT_UP` | gee | global | 100 m | static | GEE auth required |
+| `NLCD_IMPERVIOUS` | hyriver | CONUS | 30 m | static | auth-free; nature: satellite_derived |
+| `GHSL_BUILT_UP` | gee | global | 100 m | static | GEE auth required; nature: satellite_derived |
 
 ### Population (3 products)
 
 | ID | Source | Coverage | Resolution | Timestep | Notes |
 |---|---|---|---|---|---|
-| `GHSL_POP` | gee | global | 100 m | 5-yearly | — |
-| `WORLDPOP` | gee | global | 100 m | annual | — |
-| `GPW_V411` | gee | global | 927 m | 5-yearly | — |
+| `GHSL_POP` | gee | global | 100 m | 5-yearly | nature: mapped |
+| `WORLDPOP` | gee | global | 100 m | annual | nature: mapped |
+| `GPW_V411` | gee | global | 927 m | 5-yearly | nature: mapped |
 
 ## Routing System
 

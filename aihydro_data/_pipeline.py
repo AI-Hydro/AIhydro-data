@@ -1186,6 +1186,7 @@ def _fetch_one(
         citation=spec.citation,
         bibtex=spec.bibtex,
         spatial_support=support,
+        data_nature=getattr(spec, "data_nature", None) or "",
         aggregation_actual=agg_actual,
         next_steps=list(spec.next_steps),
         notes=notes,

@@ -321,6 +321,21 @@ The pipeline enforces honesty:
 - `aggregation="basin_mean"` on a point/reach product is silently downgraded to `{support}_value` with an explicit note attached to the result (`FetchResult.notes`).
 - `FetchResult.spatial_support` and `FetchResult.aggregation_actual` surface the actual semantics so agents/users always know what the number means.
 
+## Data-nature model
+
+Alongside `spatial_support`, every `ProductSpec` declares `data_nature: Literal["gauge_observed", "gridded_obs_derived", "reanalysis", "modelled", "satellite_derived", "mapped"]`. It says what kind of knowledge the values are, independent of how they are supported in space. A registry test fails if any registered product leaves it undeclared; the field itself defaults to `None` so a new product cannot silently inherit a class.
+
+| `data_nature` | Meaning | Example products |
+|---|---|---|
+| `gauge_observed` | Measured at a physical gauge or station | `NWIS_STREAMFLOW` |
+| `gridded_obs_derived` | Gridded surface built from station observations (interpolated or blended) | `DAYMET_*`, `GRIDMET_*` |
+| `reanalysis` | Model-assimilation reconstruction | `ERA5L_*`, `OPEN_METEO_*` |
+| `modelled` | Hydrological or water-balance model output | `GEOGLOWS_RETRO`, `OPENMETEO_FLOOD`, `GLOFAS_STREAMFLOW`, `TERRACLIMATE_AET` |
+| `satellite_derived` | Retrieved or classified from spaceborne sensors | `MODIS_*`, `SENTINEL2_*`, `SMAP_SM`, `GLO30`, `NLCD`, `CHIRPS` |
+| `mapped` | Thematic or survey maps, gridded inventories | geology, soils, census population, `DEM3DEP_10M` |
+
+Several products sit between classes (for example gridMET, CHIRPS, MOD16, POLARIS); the comment beside each `data_nature=` in `aihydro_data/products/*.py` records the reasoning, and the classes describe provenance, not accuracy. `FetchResult.data_nature` mirrors the served product, is returned by the MCP result dict, and is stored in the cache manifest; results restored from entries written before this field report `""` (not recorded), never a value inferred from the current registry. `aihydro_data.contracts.is_observed_nature()` maps it onto the boolean `is_observed` of `aihydro-core`'s `AttrProvenance`: only `gauge_observed` is True.
+
 ## Verify-on-read cache
 
 Cache keys in auto mode exclude the product ID: the same (variable, geometry, start, end, aggregation) maps to the same key regardless of which product won. This is deliberate — the data are interchangeable for the same request.
