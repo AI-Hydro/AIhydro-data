@@ -17,6 +17,8 @@ tests/benchmarks/basins.json
 *.tif
 *.tiff
 *.nc
+# Evidence folders keep their raw NetCDF responses (hashes are cited in their READMEs)
+!docs/vision-2040/evidence/**/*.nc
 *.hdf5
 *.h5
 *.zarr/
