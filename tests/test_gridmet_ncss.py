@@ -370,7 +370,12 @@ def test_backend_attaches_method_requests_and_hashes_for_the_result():
 
 def test_pipeline_surfaces_the_method_in_notes_and_upstream(monkeypatch):
     """End to end through fetch(): notes and upstream on the FetchResult."""
+    import sys
+    import types
+
     from aihydro_data import fetch
+    # is_available() still looks for the (unused) pygridmet install marker; CI may lack it
+    monkeypatch.setitem(sys.modules, "pygridmet", types.ModuleType("pygridmet"))
     server = FakeThredds()
     monkeypatch.setattr(hyriver, "_gridmet_client", lambda: _client(server))
     res = fetch("precipitation", FISH_POLY, "1999-10-01", "2000-09-30", mode="manual",

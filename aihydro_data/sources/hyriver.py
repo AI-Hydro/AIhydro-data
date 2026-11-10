@@ -1,8 +1,7 @@
 """
 HyRiver backend.
 
-Wraps GridMET (direct THREDDS NCSS client, ``_gridmet_ncss``; pygridmet stays the
-install marker) and pydaymet (Daymet) for CONUS / North America
+Wraps GridMET (direct THREDDS NCSS client, ``_gridmet_ncss``; pygridmet is not needed) and pydaymet (Daymet) for CONUS / North America
 precipitation and other meteorological variables. All HyRiver imports are
 lazy so this module is importable without the extra installed.
 
@@ -446,8 +445,6 @@ class Backend(SourceBackend):
         end: str,
         aggregation: AggregationMode,
     ) -> Any:
-        require_import("pygridmet", extra="hyriver", backend="hyriver")   # the extra stays the install marker
-
         import pandas as pd
 
         from aihydro_data.sources._retry import call_with_retry
@@ -512,8 +509,6 @@ class Backend(SourceBackend):
         start: str,
         end: str,
     ) -> Any:
-        require_import("pygridmet", extra="hyriver", backend="hyriver")
-
         import geopandas as gpd
         var_key = cfg["pygridmet_variable"]
         gdf = gpd.GeoDataFrame(geometry=[geometry], crs="EPSG:4326")
