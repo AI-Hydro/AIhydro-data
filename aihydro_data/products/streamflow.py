@@ -55,7 +55,9 @@ PRODUCTS: list[ProductSpec] = [
         requires_extras=[],             # only `requests`, a base dependency
         requires_auth=[],               # an api.data.gov key (API_USGS_PAT) is optional; unauthenticated use is rate-limited
         common_pitfalls=[
-            "CONUS gauges only — for global streamflow use GRDC_STREAMFLOW (Phase 4).",
+            "CONUS gauges only. Global observed streamflow is not yet supported; the planned source is "
+            "GRDC-Caravan (CC BY 4.0, Zenodo 10.5281/zenodo.15349031). Until then, outside CONUS only "
+            "modelled flow is available (GEOGLOWS_RETRO, OPENMETEO_FLOOD, GLOFAS_STREAMFLOW), which is not gauge truth.",
             "The gauge is never guessed. Pass a USGS site number as the geometry, or a basin polygon "
             "together with its outlet (the gauge is then identified by distance along the river AND "
             "drainage-area agreement, ADR-003 amendment A2). A polygon without an outlet refuses "
@@ -96,21 +98,28 @@ PRODUCTS: list[ProductSpec] = [
         timestep="daily",
         units="m3/s",
         license=(
-            "Open, free, anonymous AWS Open Data (GEOGLOWS v2 / ECMWF). "
-            "No account, no token, no licence acceptance."
+            "CC BY 4.0 (AWS Open Data registry entry 'geoglows-v2'): attribution is required, "
+            "cite Hales et al. (2022), doi:10.1111/jfr3.12859. Free, anonymous AWS Open Data; "
+            "no account, no token, no licence acceptance."
         ),
         citation=(
-            "Ashby, K., Riley, S., Hales, R., Sanchez Lozano, J., Williams, G.P., "
-            "Nelson, E.J., Ames, D.P., and Souffront, M. (2023). GEOGLOWS ECMWF "
-            "Streamflow Model v2: global hydrologic forecasting and retrospective "
-            "discharge on the TDX-Hydro river network. https://geoglows.ecmwf.int."
+            "Hales, R.C., Nelson, E.J., Souffront, M., Gutierrez, A.L., Prudhomme, C., Kopp, S., "
+            "Ames, D.P., Williams, G.P., and Jones, N.L. (2022). Advancing global hydrologic "
+            "modeling with the GEOGloWS ECMWF streamflow service. Journal of Flood Risk "
+            "Management, 18(1), e12859. https://doi.org/10.1111/jfr3.12859."
         ),
         bibtex=(
-            "@misc{GEOGLOWS2023,\n"
-            "  title        = {{GEOGLOWS} {ECMWF} Streamflow Model v2},\n"
-            "  author       = {{GEOGLOWS} and {ECMWF}},\n"
-            "  year         = {2023},\n"
-            "  howpublished = {\\url{https://geoglows.ecmwf.int}}\n"
+            "@article{Hales2022GEOGLOWS,\n"
+            "  title   = {Advancing global hydrologic modeling with the {GEOGloWS} {ECMWF} streamflow service},\n"
+            "  author  = {Hales, Riley C. and Nelson, E. James and Souffront, Michael and "
+            "Gutierrez, Angelica L. and Prudhomme, Christel and Kopp, Steve and Ames, Daniel P. and "
+            "Williams, Gustavious P. and Jones, Norman L.},\n"
+            "  journal = {Journal of Flood Risk Management},\n"
+            "  volume  = {18},\n"
+            "  number  = {1},\n"
+            "  pages   = {e12859},\n"
+            "  year    = {2022},\n"
+            "  doi     = {10.1111/jfr3.12859}\n"
             "}"
         ),
         homepage="https://geoglows.ecmwf.int",
