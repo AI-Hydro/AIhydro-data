@@ -1,0 +1,17 @@
+{
+ "request_url": "http://thredds.northwestknowledge.net:8080/thredds/ncss/agg_met_pr_1979_CurrentYear_CONUS.nc?var=precipitation_amount&north=47.316000&west=-68.966000&east=-68.073000&south=46.684000&disableProjSubset=on&horizStride=1&time_start=1999-10-01T00%3A00%3A00Z&time_end=2000-09-30T00%3A00%3A00Z&timeStride=1&addLatLon=true&accept=netcdf",
+ "status": 200,
+ "bytes": 275820,
+ "sha256": "adc1617ee55c34dd4eef1af54d1337937d07e8ec585589532cc950c0243d42d0",
+ "days": 366,
+ "basin_mean": {
+  "method": "cell_centre_in_polygon_unweighted_mean",
+  "grid_deg": 0.041667,
+  "cells_in_geometry": 315,
+  "cells_with_data": 313,
+  "cells_without_data": 2,
+  "all_touched_fallback": false
+ },
+ "mean_mm_day": 2.7946,
+ "total_mm": 1022.8
+}

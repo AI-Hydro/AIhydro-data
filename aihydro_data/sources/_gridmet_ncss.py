@@ -3,7 +3,7 @@ Direct GridMET client over the THREDDS NetCDF Subset Service (NCSS).
 
 Why this exists (evidence: docs/vision-2040/evidence/agu26-demo-1/rehearsal, FINDINGS F1,
 re-diagnosed 2026-11-10; evidence: docs/vision-2040/evidence/gridmet-ncss-probe-2026-11-10,
-7 diagnostic requests + 3 for the WY2000 / calendar-2000 check = 10 to the approved host):
+7 diagnostic requests + 3 for the WY2000 / calendar-2000 check + 1 raw WY2000 response kept = 11 to the approved host):
 
 * ``pygridmet.get_bygeom`` treats ANY NaN in a downloaded file as a corrupt
   download: it deletes the file, downloads it again 15 times and then raises
@@ -352,10 +352,14 @@ def _tidy(raw: Any, abbr: str) -> Any:
 
 
 def _clip_to_geometry(ds: Any, geometry: Any) -> tuple[Any, bool, int]:
-    """Keep the cells whose CENTRE is inside ``geometry`` (the rule ``rio.clip`` applied in
-    the pygridmet path); cells elsewhere become NaN and the grid is cropped to the kept
-    cells. A geometry that holds no cell centre (smaller than a cell) falls back to every
-    cell it touches. Returns ``(dataset, used_all_touched, cells_in_geometry)``. The count
+    """Keep the cells whose CENTRE is strictly inside ``geometry`` (``shapely.contains_xy``);
+    cells elsewhere become NaN and the grid is cropped to the kept cells. This is the same
+    cell-centre-in-polygon idea as the old ``rio.clip`` path but not bit-identical to its
+    GDAL scanline rasterisation: a centre lying exactly ON the polygon boundary is excluded
+    here, so the two can differ by about one cell per boundary-aligned edge. Delineated
+    basins essentially never put a centre exactly on the boundary; grid-aligned bounding
+    boxes can. A geometry that holds no cell centre (smaller than a cell) falls back to
+    every cell it touches (the old code returned an empty grid for it). Returns ``(dataset, used_all_touched, cells_in_geometry)``. The count
     is of cells selected by the geometry, not of cells with data: cells outside the
     GridMET grid are NaN in the data itself and are counted separately by the caller."""
     import numpy as np
