@@ -239,9 +239,67 @@ def test_fetch_raster_uses_explicit_scale_over_the_product_scale():
         assert seen["scale_m"] == 90.0
 
 
-def test_scale_enters_the_cache_key_only_when_given():
-    src = inspect.getsource(sys.modules["aihydro_data._pipeline"])
-    assert 'key_payload["scale_m"] = float(scale)' in src and "if scale is not None:" in src
+class _KeyStop(BaseException):
+    pass
+
+
+def _key_payload(**kw):
+    """Run the real fetch() up to the cache-key builder and return its payload."""
+    from unittest.mock import patch as _p
+    from shapely.geometry import box
+    import aihydro_data.cache as cache_mod
+    from aihydro_data import fetch
+
+    def spy(payload):
+        spy.payload = payload
+        raise _KeyStop
+
+    with _p.object(cache_mod, "cache_key", spy):
+        try:
+            fetch(**{"variable": "precipitation", "geometry": box(-69.2, 46.9, -68.3, 47.5),
+                     "start": "2000-01-01", "end": "2000-01-05", **kw})
+        except _KeyStop:
+            pass
+    return spy.payload
+
+
+def test_scale_enters_the_cache_key_only_when_given_and_a_gee_product_is_in_the_chain():
+    from aihydro_data.cache import cache_key
+    none_ = _key_payload()
+    same = _key_payload(scale=None)
+    sixty = _key_payload(scale=60)
+    ninety = _key_payload(scale=90)
+    assert none_ == same and "scale_m" not in none_
+    assert cache_key(none_) == cache_key(same)
+    assert sixty["scale_m"] == 60.0
+    assert cache_key(sixty) != cache_key(none_)
+    assert cache_key(sixty) != cache_key(ninety)
+
+
+def test_scale_is_kept_out_of_the_key_when_no_gee_product_can_serve():
+    from aihydro_data.cache import cache_key
+    pin = dict(mode="manual", product="GRIDMET_PRECIP", fallback=[])
+    assert cache_key(_key_payload(scale=60, **pin)) == cache_key(_key_payload(**pin))
+
+
+def test_scale_on_a_non_gee_product_is_noted_not_applied():
+    import pandas as pd
+    from aihydro_data import _pipeline
+    from aihydro_data.products import get_product
+    spec = get_product("GRIDMET_PRECIP")
+    df = pd.DataFrame({"precipitation": [1.0, 2.0]},
+                      index=pd.date_range("2000-01-01", periods=2))
+    fake = types.SimpleNamespace(
+        is_available=lambda spec=None: (True, None),
+        fetch_timeseries=lambda *a, **k: df)
+    from shapely.geometry import box
+    from aihydro_data.contracts import FetchRequest
+    req = FetchRequest(variable="precipitation", geometry=box(-69, 47, -68, 48),
+                       start="2000-01-01", end="2000-01-02")
+    with patch("aihydro_data.sources.base.get_backend", lambda src: fake):
+        res = _pipeline._fetch_one(spec, box(-69, 47, -68, 48), "2000-01-01", "2000-01-02",
+                                   "basin_mean", req, scale=60)
+    assert any("scale=60 m was ignored" in n for n in res.notes)
 
 
 # ── 4. native-resolution tiling uses the same model ──────────────────────────
@@ -268,3 +326,139 @@ def test_tiled_download_sizes_every_tile_under_the_limit(no_net):
     assert len(calls) > 1
     worst = max(_true_ee_bytes(r, 10.0, 1, 8, (0.5, 0.5)) for r in calls)
     assert worst <= LIMIT
+
+
+# ── 5. bytes per pixel from the export's real band type ──────────────────────
+
+def _types(**bands):
+    return types.SimpleNamespace(bandTypes=lambda: types.SimpleNamespace(getInfo=lambda: bands))
+
+
+@pytest.mark.parametrize("t,expect", [
+    ({"type": "PixelType", "precision": "float"}, 4),
+    ({"type": "PixelType", "precision": "double"}, 8),
+    ({"type": "PixelType", "precision": "int", "min": 0, "max": 255}, 1),
+    ({"type": "PixelType", "precision": "int", "min": -32768, "max": 32767}, 2),
+    ({"type": "PixelType", "precision": "int", "min": 0, "max": 65535}, 2),
+    ({"type": "PixelType", "precision": "int", "min": -2**31, "max": 2**31 - 1}, 4),
+    ({"type": "PixelType", "precision": "int", "min": 0, "max": 2**53}, 8),
+])
+def test_bytes_per_pixel_from_band_types(t, expect):
+    from aihydro_data.sources.gee._download import ee_bytes_per_pixel
+    assert ee_bytes_per_pixel(_types(b=t), ["b"]) == (expect, "ee_band_types")
+
+
+def test_widest_band_wins_and_unreadable_types_fall_back_to_float64():
+    from aihydro_data.sources.gee._download import ee_bytes_per_pixel
+    two = _types(a={"precision": "int", "min": 0, "max": 255}, b={"precision": "float"})
+    assert ee_bytes_per_pixel(two, ["a", "b"]) == (4, "ee_band_types")
+    assert ee_bytes_per_pixel(object(), ["a"]) == (8, "default_float64")
+    assert ee_bytes_per_pixel(_types(a={"precision": "weird"}), ["a"]) == (8, "default_float64")
+
+
+class _TypedImg(_Img):
+    def __init__(self, band_type, **kw):
+        super().__init__(**kw)
+        self.bandTypes = _types(b=band_type).bandTypes
+
+
+def _fish_spec(**cfg):
+    return types.SimpleNamespace(
+        backend_config={"static": True, "gee_dataset_id": "X", "band": "b", "scale_m": 30, **cfg},
+        source_dataset_id="X", id="P", variable="v")
+
+
+def _backend_with(img, roi):
+    ee = types.ModuleType("ee")
+    ee.Geometry = lambda g: g
+    ee.Image = lambda d: types.SimpleNamespace(select=lambda b: img)
+    ee.ImageCollection = lambda d: types.SimpleNamespace(mosaic=lambda: types.SimpleNamespace(select=lambda b: img))
+    return ee
+
+
+def test_dem_int_product_plans_finer_than_an_index_composite_and_records_it(no_net):
+    roi = _roi(FISH_RIVER)
+    dem = _TypedImg({"type": "PixelType", "precision": "int", "min": -32768, "max": 32767})
+    ee = _backend_with(dem, roi)
+    be = Backend()
+    be._open_geotiff = lambda tmp: xr.DataArray(np.ones((1, 3, 3)), dims=("band", "y", "x"))
+    with patch.dict(sys.modules, {"ee": ee}), \
+            patch.object(Backend, "_assert_available", lambda self: None), \
+            patch.object(Backend, "_geom_to_geojson", staticmethod(lambda g: roi)):
+        da = be.fetch_raster(_fish_spec(), object(), "", "")
+    rec = da.attrs["aihydro_upstream"]["gee_export"]
+    assert rec["bytes_per_pixel_assumed"] == 2 and rec["bytes_per_pixel_source"] == "ee_band_types"
+
+    idx = _Img()
+    da2, idx_scale = _Dl()._download_image_array(idx, "roi", roi, ["ndvi"], 30.0)
+    rec2 = da2.attrs["aihydro_upstream"]["gee_export"]
+    assert rec2["bytes_per_pixel_assumed"] == 8 and rec2["bytes_per_pixel_source"] == "default_float64"
+    assert rec["final_scale_m"] < idx_scale
+    assert _true_ee_bytes(FISH_RIVER, rec["final_scale_m"], 1, 2, (0.4, 0.4)) <= LIMIT
+
+
+def test_float32_dem_plans_between_int16_and_float64():
+    from aihydro_data.sources.gee._download import min_scale_for_budget
+    s = {bpp: min_scale_for_budget(FISH_RIVER, 1, bpp) for bpp in (2, 4, 8)}
+    assert s[2] < s[4] < s[8]
+
+
+# ── 6. provenance survives unit conversion, multiband and SoilGrids ──────────
+
+def test_provenance_survives_unit_conversion_in_fetch_raster(no_net):
+    img = _TypedImg({"precision": "float"}, ok_from=40.0)
+    ee = _backend_with(img, SMALL)
+    be = Backend()
+    be._open_geotiff = lambda tmp: xr.DataArray(np.ones((1, 3, 3)), dims=("band", "y", "x"))
+    with patch.dict(sys.modules, {"ee": ee}), \
+            patch.object(Backend, "_assert_available", lambda self: None), \
+            patch.object(Backend, "_geom_to_geojson", staticmethod(lambda g: SMALL)):
+        da = be.fetch_raster(_fish_spec(unit_conversion=0.1), object(), "", "")
+    assert float(da.max()) == pytest.approx(0.1)           # conversion really ran
+    up = da.attrs["aihydro_upstream"]["gee_export"]
+    assert len(up["attempts"]) > 1 and up["bytes_per_pixel_assumed"] == 4
+    assert any("not the requested 30 m" in n for n in da.attrs["aihydro_notes"])
+
+
+def test_provenance_survives_multiband_dataset(no_net):
+    img = _Img(ok_from=40.0)
+    be = Backend()
+    be._open_geotiff = lambda tmp: xr.DataArray(
+        np.ones((2, 3, 3)), dims=("band", "y", "x"), coords={"band": [1, 2]})
+    spec = types.SimpleNamespace(
+        id="S", source_dataset_id="X",
+        backend_config={"gee_dataset_id": "X", "band_map": {"red": "B4", "nir": "B8"},
+                        "scale_m": 30, "scale_factor": 0.0001, "offset": 0.0})
+    ee = types.ModuleType("ee")
+    ee.Geometry = lambda g: g
+    with patch.dict(sys.modules, {"ee": ee}), \
+            patch.object(Backend, "_assert_available", lambda self: None), \
+            patch.object(Backend, "_geom_to_geojson", staticmethod(lambda g: SMALL)), \
+            patch.object(Backend, "_masked_median_composite",
+                         lambda self, *a, **k: types.SimpleNamespace(clip=lambda r: img)):
+        ds = be.fetch_multiband_composite(spec, object(), "2014-06-01", "2014-09-30")
+    up = ds.attrs["aihydro_upstream"]["gee_export"]
+    assert len(up["attempts"]) > 1 and up["bytes_per_pixel_assumed"] == 8
+    assert any("not the requested 30 m" in n for n in ds.attrs["aihydro_notes"])
+
+
+def test_provenance_survives_soilgrids_dataset(no_net):
+    img = _TypedImg({"precision": "float"}, ok_from=40.0)
+    img.reproject = lambda crs, scale: img
+    be = Backend()
+    be._open_geotiff = lambda tmp: xr.DataArray(np.ones((1, 3, 3)), dims=("band", "y", "x"))
+    spec = types.SimpleNamespace(
+        id="SG", source_dataset_id="X",
+        backend_config={"soil_properties": ["sand", "clay"], "soil_depth": "0-5cm",
+                        "soil_depth_suffix": "5", "scale_m": 30, "unit_conversion": 0.1})
+    ee = types.ModuleType("ee")
+    ee.Geometry = lambda g: g
+    ee.Image = lambda d: types.SimpleNamespace(select=lambda b: img)
+    with patch.dict(sys.modules, {"ee": ee}), \
+            patch.object(Backend, "_assert_available", lambda self: None), \
+            patch.object(Backend, "_geom_to_geojson", staticmethod(lambda g: SMALL)):
+        ds = be._fetch_soilgrids_raster(spec, object())
+    exp = ds.attrs["aihydro_upstream"]["gee_export"]
+    assert set(exp) == {"sand", "clay"}
+    assert all(len(v["attempts"]) > 1 and v["bytes_per_pixel_assumed"] == 4 for v in exp.values())
+    assert any("not the requested 30 m" in n for n in ds.attrs["aihydro_notes"])

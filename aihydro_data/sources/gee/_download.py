@@ -99,6 +99,46 @@ def min_scale_for_budget(
     return s
 
 
+def ee_bytes_per_pixel(image: Any, bands: list[str] | None = None) -> tuple[int, str]:
+    """Bytes per pixel EE will write for *image*, from its own band types.
+
+    ``(bytes, source)``. EE writes every band as the widest type present, so the
+    maximum over *bands* is returned. Falls back to the 8 B float64 upper bound
+    (``source="default_float64"``) if the types cannot be read or are not
+    recognised. Only for images WITHOUT server-side arithmetic; arithmetic
+    results (index/expression composites) are double precision and must keep 8.
+    """
+    try:
+        types_ = image.bandTypes().getInfo()
+        names = [b for b in (bands or []) if b in types_] or list(types_)
+        widest = 0
+        for n in names:
+            t = types_[n]
+            prec = t.get("precision")
+            if prec == "double":
+                w = 8
+            elif prec == "float":
+                w = 4
+            elif prec == "int":
+                lo, hi = t.get("min", -2**31), t.get("max", 2**31 - 1)
+                if lo >= -128 and hi <= 255:
+                    w = 1
+                elif lo >= -32768 and hi <= 65535:
+                    w = 2
+                elif lo >= -2**31 and hi <= 2**32 - 1:
+                    w = 4
+                else:
+                    w = 8
+            else:
+                raise ValueError(f"unrecognised band type {t!r}")
+            widest = max(widest, w)
+        if widest:
+            return widest, "ee_band_types"
+    except Exception as exc:
+        log.debug("band types unavailable (%s); assuming float64.", exc)
+    return EE_DEFAULT_BYTES_PER_PIXEL, "default_float64"
+
+
 def is_ee_size_error(exc: BaseException) -> tuple[bool, int | None]:
     """``(True, reported_bytes_or_None)`` if *exc* is EE's request-too-large error."""
     import re
@@ -168,6 +208,7 @@ class _DownloadMixin:
         native_resolution: bool = False,
         label: str = "GEE",
         bytes_per_pixel: int = EE_DEFAULT_BYTES_PER_PIXEL,
+        bytes_per_pixel_source: str = "default_float64",
         max_retries: int = EE_MAX_RETRIES,
     ) -> tuple[Any, float]:
         """Unified GEE raster download → ``(xr.DataArray, effective_scale_m)``.
@@ -204,6 +245,7 @@ class _DownloadMixin:
             "native_resolution": bool(native_resolution),
             "ee_limit_bytes": EE_REQUEST_LIMIT_BYTES,
             "bytes_per_pixel_assumed": int(bytes_per_pixel),
+            "bytes_per_pixel_source": bytes_per_pixel_source,
             "safety_factor": EE_SAFETY_FACTOR,
             "max_retries": int(max_retries),
             "attempts": [],

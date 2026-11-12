@@ -260,7 +260,9 @@ def fetch(
         scale is coarsened up front and, on an EE request-size error, retried
         coarser (bounded); the final scale and every attempt are recorded in
         `result.upstream["gee_export"]` and a note says when it differs from
-        the request.
+        the request. For a non-GEE product `scale` is ignored (a note on the
+        result says so) and, when no GEE product is in the candidate chain, it
+        is not part of the cache key.
 
     Returns FetchResult (or list[FetchResult] for batch inputs) with .data
     (pd.DataFrame or xr.DataArray), .citation, .next_steps, etc.
@@ -563,7 +565,9 @@ def fetch(
         key_payload["index"] = index.upper()
     if native_resolution:
         key_payload["native_resolution"] = True
-    if scale is not None:
+    if scale is not None and any(s.source == "gee" for s in candidate_specs):
+        # Only GEE honours scale=; for a chain with no GEE product it cannot change
+        # the data, so it must not split the cache (a note says it was ignored).
         key_payload["scale_m"] = float(scale)
     if req.gauge_id is not None:
         _g = str(req.gauge_id).strip().upper().replace("USGS:", "USGS-")
@@ -1140,6 +1144,15 @@ def _fetch_one(
         _chunk_info = dict(data.attrs.pop("aihydro_chunk_validation", {}) or {})
     except Exception:
         pass
+
+    if scale is not None and spec.source != "gee":
+        try:
+            data.attrs["aihydro_notes"] = list(data.attrs.get("aihydro_notes", [])) + [
+                f"scale={scale:g} m was ignored: only Earth Engine exports honour an explicit "
+                f"scale; {spec.id} ({spec.source}) was served at its own resolution."
+            ]
+        except Exception:
+            pass
 
     # Harvest backend-attached caveats (e.g. "polygon mask failed") so
     # degradations surface on the result instead of dying in debug logs.
