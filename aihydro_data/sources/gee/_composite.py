@@ -28,6 +28,7 @@ class _CompositeMixin:
         end: str,
         *,
         native_resolution: bool = False,
+        scale: Optional[float] = None,
     ) -> Any:
         """Return a cloud-masked median reflectance composite as an xr.Dataset.
 
@@ -61,7 +62,7 @@ class _CompositeMixin:
                 f"Product {spec.id!r} has no 'band_map' in backend_config; "
                 "cannot build a multi-band composite."
             )
-        scale_m = float(cfg.get("scale_m", 20))
+        scale_m = float(scale) if scale is not None else float(cfg.get("scale_m", 20))
         cloud_property = cfg.get("cloud_property")
         max_cloud_pct = float(cfg.get("max_cloud_pct", 60))
         cloud_mask = cfg.get("cloud_mask")
@@ -100,6 +101,9 @@ class _CompositeMixin:
         ds.attrs["sensor"] = cfg.get("sensor", spec.id.lower())
         ds.attrs["dataset_id"] = dataset_id
         ds.attrs["resolution_m"] = scale_m
+        for _k in ("aihydro_upstream", "aihydro_notes"):   # band math drops attrs
+            if _k in raw.attrs:
+                ds.attrs[_k] = raw.attrs[_k]
         return ds
 
     def fetch_index_composite(
@@ -112,6 +116,7 @@ class _CompositeMixin:
         *,
         mask_clouds: bool = True,
         native_resolution: bool = False,
+        scale: Optional[float] = None,
     ) -> Any:
         """Compute a spectral index ENTIRELY ON GEE's servers and download only
         the single-band result as an :class:`xarray.DataArray`.
@@ -160,7 +165,7 @@ class _CompositeMixin:
                 f"by index {index_name!r} (has {sorted(band_map)})."
             )
 
-        scale_m = float(cfg.get("scale_m", 20))
+        scale_m = float(scale) if scale is not None else float(cfg.get("scale_m", 20))
         cloud_property = cfg.get("cloud_property")
         max_cloud_pct = float(cfg.get("max_cloud_pct", 60))
         cloud_mask = cfg.get("cloud_mask") if mask_clouds else None

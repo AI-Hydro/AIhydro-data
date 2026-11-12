@@ -29,6 +29,87 @@ def _attach_note(da: Any, note: str) -> Any:
     return da
 
 
+# ── Request-size model for ``ee.Image.getDownloadURL`` ────────────────────────
+# Derived from how EE sizes a request, not fitted to an observation:
+#
+# * EE rejects a request whose uncompressed raster
+#   (cols x rows x sum(bytes per band)) exceeds 50,331,648 bytes (48 MiB).
+#   The limit is on raw pixel bytes, so base64 / GeoTIFF container overhead is
+#   not part of it (the GeoTIFF header is a few KB and the response is not
+#   base64-expanded before the check).
+# * With no ``crs`` argument the export grid is EPSG:4326 and EE converts the
+#   requested ``scale`` (metres) to degrees with the equatorial radius,
+#   1 deg = 2*pi*6378137/360 = 111,319.49 m, in BOTH axes. There is no
+#   cos(latitude) term, so a degree-box holds (111,319.49/scale)^2 pixels per
+#   square degree at every latitude. A true-ground-area estimate
+#   (lon_km * cos(lat) ...) therefore under-counts columns by cos(lat); at
+#   47 N that is 0.68, i.e. 1.47x too few pixels. This was the root cause of
+#   the DEMO-1 F10a failure.
+# * Bytes per pixel: EE exports every band as the widest type in the image and
+#   server-side arithmetic (scale/offset, ``expression`` indices, medians of
+#   rescaled bands) yields double precision, so 8 B/band is the safe upper
+#   bound; 4 (float32), 2 (uint16) or 1 (byte) only when a caller knows the
+#   type. The old code assumed 4.
+# * The region is snapped outward to the pixel grid: at most +1 column and +1
+#   row, counted in the estimate.
+# * The remaining safety factor covers what the model cannot see (projection
+#   of a non-4326 source, EE rounding). It is a stated margin, and the bounded
+#   retry in ``_download_image_array`` is the backstop when it is not enough.
+EE_REQUEST_LIMIT_BYTES = 50_331_648
+EE_METRES_PER_DEGREE = 2 * 3.141592653589793 * 6_378_137.0 / 360.0   # 111,319.49
+EE_DEFAULT_BYTES_PER_PIXEL = 8
+EE_SAFETY_FACTOR = 1.25
+EE_MAX_RETRIES = 3
+EE_RETRY_FACTOR = 1.25
+
+
+def estimate_request_bytes(
+    bounds: tuple[float, float, float, float],
+    scale_m: float,
+    n_bands: int,
+    bytes_per_pixel: int = EE_DEFAULT_BYTES_PER_PIXEL,
+) -> int:
+    """Upper-model size in bytes of a ``getDownloadURL`` request (see above).
+
+    *bounds* is ``(minx, miny, maxx, maxy)`` in degrees (EPSG:4326).
+    """
+    import math
+    minx, miny, maxx, maxy = bounds
+    cols = math.ceil((maxx - minx) * EE_METRES_PER_DEGREE / scale_m) + 1
+    rows = math.ceil((maxy - miny) * EE_METRES_PER_DEGREE / scale_m) + 1
+    return int(cols * rows * max(int(n_bands), 1) * int(bytes_per_pixel))
+
+
+def min_scale_for_budget(
+    bounds: tuple[float, float, float, float],
+    n_bands: int,
+    bytes_per_pixel: int = EE_DEFAULT_BYTES_PER_PIXEL,
+    safety: float = EE_SAFETY_FACTOR,
+) -> int:
+    """Smallest whole-metre scale whose estimated request, times *safety*,
+    fits EE's limit."""
+    import math
+    minx, miny, maxx, maxy = bounds
+    w_m = (maxx - minx) * EE_METRES_PER_DEGREE
+    h_m = (maxy - miny) * EE_METRES_PER_DEGREE
+    px_budget = EE_REQUEST_LIMIT_BYTES / (safety * max(int(n_bands), 1) * bytes_per_pixel)
+    s = max(1, math.ceil(math.sqrt(max(w_m * h_m, 1.0) / px_budget)))
+    while estimate_request_bytes(bounds, s, n_bands, bytes_per_pixel) * safety > EE_REQUEST_LIMIT_BYTES:
+        s += 1
+    return s
+
+
+def is_ee_size_error(exc: BaseException) -> tuple[bool, int | None]:
+    """``(True, reported_bytes_or_None)`` if *exc* is EE's request-too-large error."""
+    import re
+    msg = str(exc)
+    low = msg.lower()
+    if "request size" in low and "must be less than or equal to" in low:
+        m = re.search(r"request size \((\d+) bytes\)", msg, re.I)
+        return True, int(m.group(1)) if m else None
+    return False, None
+
+
 class _DownloadMixin:
     """Mixin carrying all GEE raster-download helpers.
 
@@ -86,15 +167,22 @@ class _DownloadMixin:
         *,
         native_resolution: bool = False,
         label: str = "GEE",
+        bytes_per_pixel: int = EE_DEFAULT_BYTES_PER_PIXEL,
+        max_retries: int = EE_MAX_RETRIES,
     ) -> tuple[Any, float]:
         """Unified GEE raster download → ``(xr.DataArray, effective_scale_m)``.
 
         ONE strategy shared by ``fetch_raster``, ``fetch_multiband_composite``
         and ``fetch_index_composite``:
 
-        - default: auto-coarsen ``scale_m`` (by band count) so a single
-          ``getDownloadURL`` request stays under GEE's ~48 MB cap — never
-          raises, never truncates.
+        - default: coarsen ``scale_m`` up front with the request-size model
+          (module header) so a single ``getDownloadURL`` request stays under
+          EE's 48 MiB cap with a stated safety margin; if EE still answers
+          with its size error, coarsen by ``EE_RETRY_FACTOR`` (or the factor
+          EE's reported size implies, if larger) and retry, at most
+          *max_retries* times. Every attempt is recorded in
+          ``da.attrs["aihydro_upstream"]["gee_export"]``; exhausting the
+          retries raises ``GEE_REQUEST_TOO_LARGE``. Never truncates.
         - ``native_resolution=True``: keep the native scale and split the AOI
           into a grid of cap-sized tiles, download each, and mosaic — full
           resolution at the cost of N round-trips.
@@ -110,30 +198,107 @@ class _DownloadMixin:
         import urllib.request
 
         bands = list(gee_bands)
+        requested = float(scale_m)
+        record: dict[str, Any] = {
+            "requested_scale_m": requested,
+            "native_resolution": bool(native_resolution),
+            "ee_limit_bytes": EE_REQUEST_LIMIT_BYTES,
+            "bytes_per_pixel_assumed": int(bytes_per_pixel),
+            "safety_factor": EE_SAFETY_FACTOR,
+            "max_retries": int(max_retries),
+            "attempts": [],
+        }
+
+        def _finish(da: Any, final: float) -> tuple[Any, float]:
+            record["final_scale_m"] = float(final)
+            try:
+                up = dict(da.attrs.get("aihydro_upstream", {}) or {})
+                up["gee_export"] = record
+                da.attrs["aihydro_upstream"] = up
+            except Exception:
+                log.warning("Could not attach GEE export record to result attrs.")
+            if final != requested:
+                _attach_note(
+                    da,
+                    f"{label}: exported at {final:g} m, not the requested "
+                    f"{requested:g} m (request-size limit; "
+                    f"{len(record['attempts'])} attempt(s) recorded in "
+                    "upstream['gee_export']). Pass native_resolution=True for "
+                    "the requested scale via tiling.",
+                )
+            return da, final
 
         if native_resolution:
-            da = self._download_tiled(image, roi_geojson, bands, scale_m, label=label)
+            da = self._download_tiled(image, roi_geojson, bands, scale_m, label=label,
+                                      bytes_per_pixel=bytes_per_pixel)
             da = self._clip_to_polygon(da, roi_geojson)
-            return da, scale_m
+            record["planned_scale_m"] = requested
+            return _finish(da, scale_m)
 
         scale_m = self._coarsen_scale_for_budget(
             None, roi_geojson, n_bands=len(bands), scale_m=scale_m, label=label,
+            bytes_per_pixel=bytes_per_pixel,
         )
-        params = {"region": roi, "scale": scale_m, "format": "GEO_TIFF"}
-        if bands:
-            params["bands"] = bands
-        url = image.getDownloadURL(params)
-        tmp = tempfile.mktemp(suffix=".tif")
-        try:
-            urllib.request.urlretrieve(url, tmp)  # noqa: S310
-            da = self._open_geotiff(tmp)
-            da = self._clip_to_polygon(da, roi_geojson)
-            return da, scale_m
-        finally:
+        record["planned_scale_m"] = float(scale_m)
+        bounds = self._roi_bounds(None, roi_geojson)
+
+        for attempt in range(1, int(max_retries) + 2):
+            est = (estimate_request_bytes(bounds, scale_m, len(bands), bytes_per_pixel)
+                   if bounds else None)
+            entry: dict[str, Any] = {
+                "attempt": attempt, "scale_m": float(scale_m),
+                "estimated_bytes": est,
+            }
+            record["attempts"].append(entry)
+            params = {"region": roi, "scale": scale_m, "format": "GEO_TIFF"}
+            if bands:
+                params["bands"] = bands
             try:
-                os.unlink(tmp)
-            except OSError:
-                pass
+                url = image.getDownloadURL(params)
+            except Exception as exc:
+                is_size, reported = is_ee_size_error(exc)
+                if not is_size:
+                    entry["outcome"] = f"error:{type(exc).__name__}"
+                    raise
+                entry["outcome"] = "ee_size_error"
+                entry["ee_reported_bytes"] = reported
+                if attempt > max_retries:
+                    from aihydro_data.exceptions import SourceUnavailable
+                    raise SourceUnavailable(
+                        code="GEE_REQUEST_TOO_LARGE",
+                        message=(
+                            f"{label}: Earth Engine still rejected the request as "
+                            f"too large after {attempt} attempt(s) "
+                            f"(last scale {scale_m:g} m): {exc}"
+                        ),
+                        recovery=(
+                            "Pass a coarser explicit scale, shrink the AOI, or "
+                            "use native_resolution=True to tile the request."
+                        ),
+                        details=record,
+                    ) from exc
+                factor = EE_RETRY_FACTOR
+                if reported:
+                    # bytes scale with 1/scale^2; ask for 5 % under the cap
+                    factor = max(factor, (reported / (EE_REQUEST_LIMIT_BYTES * 0.95)) ** 0.5)
+                new_scale = float(int(scale_m * factor) + 1)
+                log.warning("%s: EE size error at %g m; retry %d/%d at %g m.",
+                            label, scale_m, attempt, max_retries, new_scale)
+                scale_m = new_scale
+                continue
+            entry["outcome"] = "ok"
+            tmp = tempfile.mktemp(suffix=".tif")
+            try:
+                urllib.request.urlretrieve(url, tmp)  # noqa: S310
+                da = self._open_geotiff(tmp)
+                da = self._clip_to_polygon(da, roi_geojson)
+                return _finish(da, scale_m)
+            finally:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+        raise AssertionError("unreachable")  # loop returns or raises
 
     @staticmethod
     def _clip_to_polygon(da: Any, roi_geojson: Any) -> Any:
@@ -198,6 +363,7 @@ class _DownloadMixin:
         scale_m: float,
         *,
         label: str = "GEE",
+        bytes_per_pixel: int = EE_DEFAULT_BYTES_PER_PIXEL,
     ) -> Any:
         """Download ``gee_bands`` at native *scale_m* over an arbitrarily large
         AOI by splitting it into a grid of getDownloadURL-sized tiles and
@@ -213,20 +379,20 @@ class _DownloadMixin:
 
         bands = list(gee_bands)
         minx, miny, maxx, maxy = _shape(roi_geojson).bounds
-        lat_mid = (miny + maxy) / 2
-        lon_km = (maxx - minx) * 111.32 * math.cos(math.radians(lat_mid))
-        lat_km = (maxy - miny) * 111.32
-        bbox_km2 = max(lon_km * lat_km, 1.0)
-
-        budget_bytes = 50_331_648 / 2.5 / 1.1
-        pixel_budget = budget_bytes / (max(len(bands), 1) * 4)
-        total_px = (bbox_km2 * 1e6) / (scale_m ** 2)
-        n_tiles = max(1, math.ceil(total_px / pixel_budget))
+        # Same size model as the single-request path (degree-box pixel count,
+        # no cos(lat), widest band type, safety margin): tiles are sized so the
+        # modelled bytes of EACH tile stay under the cap.
+        est_bytes = estimate_request_bytes(
+            (minx, miny, maxx, maxy), scale_m, len(bands), bytes_per_pixel,
+        )
+        bbox_km2 = ((maxx - minx) * (maxy - miny)
+                    * (EE_METRES_PER_DEGREE / 1000.0) ** 2)
+        n_tiles = max(1, math.ceil(est_bytes * EE_SAFETY_FACTOR / EE_REQUEST_LIMIT_BYTES))
         aspect = max((maxx - minx) / max(maxy - miny, 1e-9), 1e-9)
         n_cols = max(1, math.ceil(math.sqrt(n_tiles * aspect)))
         n_rows = max(1, math.ceil(n_tiles / n_cols))
         log.warning(
-            "%s: NATIVE-RES tiled download — AOI ~%.0f km² at %d m (%d band%s) "
+            "%s: NATIVE-RES tiled download — degree-box ~%.0f km² at %d m (%d band%s) "
             "needs %d tile(s) (%d×%d grid). Downloading at full resolution.",
             label, bbox_km2, int(scale_m), len(bands),
             "" if len(bands) == 1 else "s", n_cols * n_rows, n_cols, n_rows,
@@ -304,6 +470,16 @@ class _DownloadMixin:
                     pass
 
     @staticmethod
+    def _roi_bounds(geometry: Any, roi_geojson: Any) -> Any:
+        """``(minx, miny, maxx, maxy)`` in degrees, or ``None`` if unavailable."""
+        try:
+            from shapely.geometry import shape as _shape
+            geom_shp = _shape(roi_geojson) if isinstance(roi_geojson, dict) else geometry
+            return tuple(geom_shp.bounds)
+        except Exception:
+            return None
+
+    @staticmethod
     def _coarsen_scale_for_budget(
         geometry: Any,
         roi_geojson: Any,
@@ -311,37 +487,25 @@ class _DownloadMixin:
         n_bands: int,
         scale_m: float,
         label: str = "GEE",
+        bytes_per_pixel: int = EE_DEFAULT_BYTES_PER_PIXEL,
     ) -> float:
-        """Return a (possibly coarsened) export scale that keeps GEE's
-        ``getDownloadURL`` request under the ~48 MB hard limit.
-
-        GEE's hard limit is 50,331,648 bytes (~48 MB) per request. Empirically
-        GEE's internal pixel count is ~2.5× a naive bbox estimate (it uses
-        equatorial-degree scale without ``cos(lat)`` for EPSG:4326 output, then
-        rounds up to tile boundaries). We target our estimate to ≤ ~18 MB so
-        GEE's actual request stays under the cap.
+        """Return a (possibly coarsened) export scale whose modelled
+        ``getDownloadURL`` request, times ``EE_SAFETY_FACTOR``, fits EE's
+        50,331,648-byte limit. See the size-model comment at module top for the
+        derivation (degree-box pixel count with no cos(lat), 8 B/band by
+        default). Never refines: a scale already fine enough is returned as is.
         """
-        import math as _math
-        try:
-            from shapely.geometry import shape as _shape
-            geom_shp = _shape(roi_geojson) if isinstance(roi_geojson, dict) else geometry
-            minx, miny, maxx, maxy = geom_shp.bounds
-            lat_mid = (miny + maxy) / 2
-            lon_km = (maxx - minx) * 111.32 * _math.cos(_math.radians(lat_mid))
-            lat_km = (maxy - miny) * 111.32
-            bbox_km2 = max(lon_km * lat_km, 1.0)
-            budget_bytes = 50_331_648 / 2.5 / 1.1   # ≈ 18 MB target
-            pixel_budget = budget_bytes / (max(n_bands, 1) * 4)   # float32
-            area_m2 = bbox_km2 * 1e6
-            min_scale = _math.ceil(_math.sqrt(area_m2 / pixel_budget))
-            if min_scale > scale_m:
-                log.warning(
-                    "%s: AOI ~%.0f km² at %d m (%d band%s) exceeds budget. "
-                    "Auto-coarsening to %d m so GEE stays under 48 MB limit.",
-                    label, bbox_km2, int(scale_m), n_bands,
-                    "" if n_bands == 1 else "s", min_scale,
-                )
-                return float(min_scale)
-        except ImportError:
-            pass
+        bounds = _DownloadMixin._roi_bounds(geometry, roi_geojson)
+        if bounds is None:
+            return scale_m
+        min_scale = min_scale_for_budget(bounds, n_bands, bytes_per_pixel)
+        if min_scale > scale_m:
+            log.warning(
+                "%s: request at %g m (%d band%s, %d B/px) is modelled at %.1f MB "
+                "against EE's %.1f MB limit; coarsening to %d m.",
+                label, scale_m, n_bands, "" if n_bands == 1 else "s", bytes_per_pixel,
+                estimate_request_bytes(bounds, scale_m, n_bands, bytes_per_pixel) / 1e6,
+                EE_REQUEST_LIMIT_BYTES / 1e6, min_scale,
+            )
+            return float(min_scale)
         return scale_m

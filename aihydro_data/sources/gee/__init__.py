@@ -246,6 +246,7 @@ class Backend(_CompositeMixin, _DownloadMixin, SourceBackend):
         end: str,
         *,
         native_resolution: bool = False,
+        scale: Optional[float] = None,
     ) -> Any:
         """Return an xarray.DataArray clipped to geometry.
 
@@ -262,7 +263,7 @@ class Backend(_CompositeMixin, _DownloadMixin, SourceBackend):
 
         if cfg.get("soil_properties"):
             return self._fetch_soilgrids_raster(
-                spec, geometry, native_resolution=native_resolution,
+                spec, geometry, native_resolution=native_resolution, scale=scale,
             )
 
         if not cfg.get("static"):
@@ -276,7 +277,7 @@ class Backend(_CompositeMixin, _DownloadMixin, SourceBackend):
 
         dataset_id = cfg.get("gee_dataset_id", spec.source_dataset_id)
         band = cfg.get("band", "")
-        scale_m = float(cfg.get("scale_m", 30))
+        scale_m = float(scale) if scale is not None else float(cfg.get("scale_m", 30))
         unit_conv = float(cfg.get("unit_conversion", 1.0))
 
         roi_geojson = self._geom_to_geojson(geometry)
@@ -293,8 +294,11 @@ class Backend(_CompositeMixin, _DownloadMixin, SourceBackend):
         )
         da = da.squeeze(drop=True)
         da.name = spec.variable
+        _export_attrs = {k: da.attrs[k] for k in ("aihydro_upstream", "aihydro_notes")
+                         if k in da.attrs}
         if unit_conv != 1.0:
-            da = da * unit_conv
+            da = da * unit_conv    # xarray arithmetic drops attrs
+            da.attrs.update(_export_attrs)
         da.attrs["resolution_m"] = scale_m
         return da
 
@@ -304,6 +308,7 @@ class Backend(_CompositeMixin, _DownloadMixin, SourceBackend):
         geometry: Any,
         *,
         native_resolution: bool = False,
+        scale: Optional[float] = None,
     ) -> Any:
         """Fetch ISRIC SoilGrids texture fractions as an :class:`xarray.Dataset`.
 
@@ -327,13 +332,15 @@ class Backend(_CompositeMixin, _DownloadMixin, SourceBackend):
         properties: list[str] = list(cfg.get("soil_properties", ["sand", "silt", "clay"]))
         depth = cfg.get("soil_depth", "0-5cm")
         depth_suffix = cfg.get("soil_depth_suffix", "5")
-        scale_m = float(cfg.get("scale_m", 250))
+        scale_m = float(scale) if scale is not None else float(cfg.get("scale_m", 250))
         unit_conv = float(cfg.get("unit_conversion", 0.1))
 
         roi_geojson = self._geom_to_geojson(geometry)
         roi = ee.Geometry(roi_geojson)
 
         ds = xr.Dataset()
+        _exports: dict[str, Any] = {}
+        _notes: list[str] = []
         first_da = None
         scale_m_eff = scale_m
         for prop in properties:
@@ -345,6 +352,8 @@ class Backend(_CompositeMixin, _DownloadMixin, SourceBackend):
                 native_resolution=native_resolution,
                 label=f"GEE SoilGrids {prop}",
             )
+            _exports[prop] = (da.attrs.get("aihydro_upstream", {}) or {}).get("gee_export")
+            _notes.extend(da.attrs.get("aihydro_notes", []))
             da = da.squeeze(drop=True) * unit_conv
             var_name = f"{prop}_{depth_suffix}"
             if first_da is None:
@@ -364,6 +373,10 @@ class Backend(_CompositeMixin, _DownloadMixin, SourceBackend):
 
         ds.attrs["dataset_id"] = collection
         ds.attrs["resolution_m"] = scale_m_eff
+        if _exports:
+            ds.attrs["aihydro_upstream"] = {"gee_export": _exports}
+        if _notes:
+            ds.attrs["aihydro_notes"] = list(dict.fromkeys(_notes))
         try:
             if first_da is not None and first_da.rio.crs is not None:
                 ds = ds.rio.write_crs(first_da.rio.crs)

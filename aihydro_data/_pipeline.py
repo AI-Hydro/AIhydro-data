@@ -211,6 +211,7 @@ def fetch(
     cache: bool = True,
     index: Optional[str] = None,
     native_resolution: bool = False,
+    scale: Optional[float] = None,
     validate: Optional[Callable[[FetchResult], bool]] = None,
     region: Optional[str] = None,
     outlet: Optional[tuple[float, float]] = None,
@@ -251,6 +252,15 @@ def fetch(
         the call is auto-dispatched to fetch_batch() and a list[FetchResult]
         is returned instead of a single FetchResult. This lets you write
         `fetch("streamflow", ["03245500", "01646500"], ...)` naturally.
+
+    Earth Engine export scale (`scale=`, `native_resolution=`):
+        `scale` (metres, additive, default None = the product's own scale)
+        sets the requested export scale for GEE raster products; other
+        backends ignore it. Unless `native_resolution=True` (tiled), the
+        scale is coarsened up front and, on an EE request-size error, retried
+        coarser (bounded); the final scale and every attempt are recorded in
+        `result.upstream["gee_export"]` and a note says when it differs from
+        the request.
 
     Returns FetchResult (or list[FetchResult] for batch inputs) with .data
     (pd.DataFrame or xr.DataArray), .citation, .next_steps, etc.
@@ -304,6 +314,17 @@ def fetch(
             code="GAUGE_REF_INVALID", message=f"basin_ref must be a BasinRef dict, got {type(basin_ref).__name__}.",
             recovery="Pass BasinRef.to_dict().", next_tools=["data_help"], docs_anchor="streamflow#nwis",
         )
+    if scale is not None:
+        import math as _math
+        if isinstance(scale, bool) or not isinstance(scale, (int, float)) \
+                or not _math.isfinite(scale) or scale <= 0:
+            from aihydro_data.exceptions import GeometryInvalid
+            raise GeometryInvalid(
+                code="SCALE_INVALID",
+                message=f"scale must be a positive finite number of metres, got {scale!r}.",
+                recovery="Pass scale=<metres> (e.g. 60) or omit it to use the product's native scale.",
+                next_tools=["data_help"], docs_anchor="gee-scale",
+            )
     # ── -1. Normalise variable name (alias table + lower/strip) ──────────
     variable = _normalise_variable(variable)
 
@@ -333,7 +354,7 @@ def fetch(
             variable, geometry, start, end,
             mode=mode, product=product, fallback=fallback,
             aggregation=aggregation, cache=cache,
-            index=index, native_resolution=native_resolution, validate=validate,
+            index=index, native_resolution=native_resolution, scale=scale, validate=validate,
             region=region, gauge_ids=_gids, basin_refs=_brefs,
         )
         errors: dict[str, Exception] = batch["errors"]
@@ -542,6 +563,8 @@ def fetch(
         key_payload["index"] = index.upper()
     if native_resolution:
         key_payload["native_resolution"] = True
+    if scale is not None:
+        key_payload["scale_m"] = float(scale)
     if req.gauge_id is not None:
         _g = str(req.gauge_id).strip().upper().replace("USGS:", "USGS-")
         key_payload["gauge_id"] = _g if _g.startswith("USGS-") or not _g.isdigit() else f"USGS-{_g}"
@@ -605,7 +628,7 @@ def fetch(
         try:
             result = _fetch_one(
                 spec, geom, start, end, aggregation, req,
-                index=index, native_resolution=native_resolution,
+                index=index, native_resolution=native_resolution, scale=scale,
             )
             # Quality gate: let the caller reject a low-quality result and
             # force the next fallback (delineation-style escalation).
@@ -951,6 +974,7 @@ def _fetch_one(
     req: FetchRequest,
     index: Optional[str] = None,
     native_resolution: bool = False,
+    scale: Optional[float] = None,
 ) -> FetchResult:
     """Fetch from a single product spec. Raises on any failure."""
     import inspect
@@ -1045,18 +1069,19 @@ def _fetch_one(
                     spec, geom, start, end, index,
                     mask_clouds=spec.backend_config.get("cloud_mask") is not None,
                     native_resolution=native_resolution,
+                    **({"scale": scale} if scale is not None else {}),
                 )
             except ValueError as ve:
                 # No server-side formula for this index → raw-band fallback.
                 log.debug("Server-side index unavailable (%s); using raw bands.", ve)
                 data = _call(backend.fetch_multiband_composite, spec, geom, start, end,
-                             native_resolution=native_resolution)
+                             native_resolution=native_resolution, scale=scale)
         else:
             data = _call(backend.fetch_multiband_composite, spec, geom, start, end,
-                         native_resolution=native_resolution)
+                         native_resolution=native_resolution, scale=scale)
     elif _agg == "raw_raster":
         data = _call(backend.fetch_raster, spec, geom, start, end,
-                     native_resolution=native_resolution)
+                     native_resolution=native_resolution, scale=scale)
     else:
         # Route through _call so optional kwargs (outlet, for reach/gauge
         # snapping backends) degrade gracefully on backends that don't accept
@@ -1216,6 +1241,7 @@ def fetch_batch(
     on_error: str = "warn",   # "warn" | "raise" | "skip"
     index: Optional[str] = None,
     native_resolution: bool = False,
+    scale: Optional[float] = None,
     validate: Optional[Callable[[FetchResult], bool]] = None,
     region: Optional[str] = None,
     gauge_ids: Optional[Mapping[str, str]] = None,
@@ -1247,7 +1273,7 @@ def fetch_batch(
                     NOTE: fetches already executing a network call run to
                     completion — Python futures cannot be interrupted mid-call.
           "skip"  → silently omit the failed entry
-    index, native_resolution, validate
+    index, native_resolution, scale, validate
         Forwarded verbatim to each per-geometry fetch() call (spectral index
         name, native-resolution raster export, quality-gate callback).
     region
@@ -1312,6 +1338,7 @@ def fetch_batch(
             cache=cache,
             index=index,
             native_resolution=native_resolution,
+            scale=scale,
             validate=validate,
             region=region,
             gauge_id=(gauge_ids or {}).get(label),
