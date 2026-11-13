@@ -6,7 +6,7 @@ Wraps REST APIs that don't go through GEE or HyRiver's OPeNDAP stack:
                              the legacy waterservices path is the D3 switch only)
   - CHIRPS_IRI precipitation (via IRI Data Library OPeNDAP — auth-free)
   - Open-Meteo temperature + PET (no auth, global, 1940-present, centroid-based)
-  - GRDC monthly streamflow (Phase 4)
+  - (not implemented) GRDC streamflow; the planned global observed source is GRDC-Caravan
 
 All imports are lazy — this module is safe to import without extras installed.
 
