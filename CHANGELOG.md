@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Tests - pin the `GEOGLOWS_RETRO` citation/licence and the NWIS pitfall pointer (DEMO-1 finding, already fixed in 0.2.10)
+
+- The DEMO-1 review asked for the `GEOGLOWS_RETRO` citation ("Ashby et al. (2023)") and licence line ("no licence acceptance", no attribution) to be corrected and the dangling `GRDC_STREAMFLOW` pointer removed. Those edits shipped in 0.2.10 (#20: Hales et al., J. Flood Risk Manag., doi:10.1111/jfr3.12859; CC BY 4.0 with attribution required; the NWIS pitfall names GRDC-Caravan). The finding was written against a stale checkout. This change adds no registry edit; it adds `tests/test_streamflow_citation_licence.py` (4, offline) so the text cannot regress, and all 4 fail on the pre-#20 registry. One of them walks every product's `common_pitfalls` and fails if a product-id-shaped token (`*_STREAMFLOW`, `*_RETRO`, `*_FLOOD`) does not resolve to a registered product.
+- `sources/direct_api.py` docstring no longer lists "GRDC monthly streamflow (Phase 4)" as if it were built; it says it is not implemented.
+- `scripts/gen_product_tables.py --check`: OK (57 products across 19 variables); the generated tables carry no citation or licence text, so nothing to regenerate.
+
 ### Fixed - Earth Engine request-size estimate under-coarsened (DEMO-1 F10a); bounded retry; explicit `scale`
 
 - **Symptom.** Basin 01013500, Landsat 8 NDVI, summer 2014, default (non-native) resolution: the auto-coarsened "33 m" request was 57.8 MB against EE's 50,331,648-byte limit and failed (`docs/vision-2040/evidence/agu26-demo-1/DEMO_PLAN_AMENDMENT_1.md`, A4).
